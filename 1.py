@@ -1,235 +1,166 @@
 import asyncio
-import logging
-from aiogram import Bot, Dispatcher, types
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
 from aiogram.filters import Command
-from aiogram import F
+from aiogram.enums import ParseMode
+import logging
 
-# Настройка логирования
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Токен бота и ID админа
+# 🔐 Конфигурация
 BOT_TOKEN = "8399893836:AAEdFVXohBkdM-jOkGf2ngaZ67_s65vQQNA"
 ADMIN_ID = 8000395560  # Замените на ваш ID в Telegram
 
 
+# 📝 Логирование
+logging.basicConfig(level=logging.INFO)
+
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# Хранилище для вопросов пользователей
-user_questions = {}
+# 💬 Статичный текст "Что это такое"
+ABOUT_TEXT = (
+    "Это бот для получения доступа к эксклюзивным видео.\n"
+    "Оплатите подписку звёздами 💎 и получите доступ к контенту!\n"
+    "Все платежи защищены через Telegram Stars."
+)
 
-# Главное меню
-def get_main_menu():
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🌟 Подписка", callback_data="subscription")],
-        [InlineKeyboardButton(text="🛠 Тех поддержка", callback_data="support")],
-        [InlineKeyboardButton(text="❓ Что это такое", callback_data="what_is_this")]
+# 📦 Пользовательские данные (в реальном проекте — база данных)
+banned_users = set()
+user_questions = {}  # user_id -> last_question
+
+# 🏠 Главное меню
+def get_main_menu() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💳 Подписка", callback_data="subscribe")],
+        [InlineKeyboardButton(text="🛠 Техподдержка", callback_data="support")],
+        [InlineKeyboardButton(text="ℹ️ Что это такое", callback_data="about")]
     ])
-    return keyboard
+    return kb
 
-# Меню подписки
-def get_subscription_menu():
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="10 видео - 5 звезд", callback_data="sub_10")],
-        [InlineKeyboardButton(text="100 видео - 15 звезд", callback_data="sub_100")],
-        [InlineKeyboardButton(text="1000 видео - 50 звезд", callback_data="sub_1000")],
-        [InlineKeyboardButton(text="Telegram Premium - 100 звезд", callback_data="sub_tg")],
-        [InlineKeyboardButton(text="Промокод - 89 звезд", callback_data="promo_code")],
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_main")]
+# 💳 Меню подписок
+def get_subscribe_menu() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="10 видео — 5 ⭐", callback_data="pay_10")],
+        [InlineKeyboardButton(text="100 видео — 15 ⭐", callback_data="pay_100")],
+        [InlineKeyboardButton(text="1000 видео — 50 ⭐", callback_data="pay_1000")],
+        [InlineKeyboardButton(text="Назад", callback_data="back_to_main")]
     ])
-    return keyboard
+    return kb
 
-# Меню поддержки
-def get_support_menu():
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_main")]
-    ])
-    return keyboard
+# 🔄 Обратно в главное меню
+@dp.callback_query(F.data == "back_to_main")
+async def back_to_main(callback: CallbackQuery):
+    await callback.message.edit_text("Главное меню:", reply_markup=get_main_menu())
 
-# Команда /start
+# 📱 Команда /start
 @dp.message(Command("start"))
-async def cmd_start(message: types.Message):
-    await message.answer(
-        "🎉 Добро пожаловать в наш бот!\n\n"
-        "Здесь вы можете получить доступ к эксклюзивному контенту. "
-        "Выберите нужный раздел ниже:",
-        reply_markup=get_main_menu()
-    )
+async def cmd_start(message: Message):
+    if message.from_user.id in banned_users:
+        await message.answer("Вы забанены.")
+        return
+    await message.answer("Добро пожаловать!", reply_markup=get_main_menu())
 
-# Обработка callback запросов
-@dp.callback_query(F.data == "subscription")
-async def subscription_handler(callback: types.CallbackQuery):
+# 📌 Главное меню: обработка кнопок
+@dp.callback_query(F.data == "subscribe")
+async def show_subscribe(callback: CallbackQuery):
     await callback.message.edit_text(
-        "💰 Выберите тип подписки:\n\n"
-        "• 10 видео - 5 звезд\n"
-        "• 100 видео - 15 звезд\n"
-        "• 1000 видео - 50 звезд\n"
-        "• Telegram Premium - 100 звезд\n"
-        "• Промокод - 89 звезд",
-        reply_markup=get_subscription_menu()
+        "Выберите тариф:\n\n"
+        "С промокодом «VIP» — скидка 11%! (50 → 45 ⭐)\n"
+        "Но пока доступна только полная цена.",
+        reply_markup=get_subscribe_menu()
     )
-    await callback.answer()
 
 @dp.callback_query(F.data == "support")
-async def support_handler(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-    user_questions[user_id] = {"waiting_for_question": True}
-    
+async def support(callback: CallbackQuery):
     await callback.message.edit_text(
-        "🛠 Техническая поддержка\n\n"
-        "Напишите ваш вопрос, и я отправлю его администратору бота. "
-        "Мы постараемся ответить как можно скорее!",
-        reply_markup=get_support_menu()
+        "Напишите свой вопрос — я передам его администратору бота!"
     )
-    await callback.answer()
+    # Сохраняем состояние (упрощённо — без FSM)
+    user_questions[callback.from_user.id] = True
 
-@dp.callback_query(F.data == "what_is_this")
-async def what_is_this_handler(callback: types.CallbackQuery):
-    await callback.message.edit_text(
-        "🤖 О нашем боте:\n\n"
-        "Это инновационный бот для доступа к эксклюзивному видео-контенту! "
-        "Мы предлагаем различные варианты подписок по доступным ценам.\n\n"
-        "🌟 Особенности:\n"
-        "• Качественный контент\n"
-        "• Доступные цены\n"
-        "• Мгновенный доступ\n"
-        "• Техническая поддержка 24/7\n\n"
-        "Выберите подписку и наслаждайтесь контентом!",
-        reply_markup=get_main_menu()
-    )
-    await callback.answer()
+@dp.callback_query(F.data == "about")
+async def about(callback: CallbackQuery):
+    await callback.message.edit_text(ABOUT_TEXT, reply_markup=get_main_menu())
 
-@dp.callback_query(F.data.startswith("sub_"))
-async def subscription_payment_handler(callback: types.CallbackQuery):
-    subscription_type = callback.data
-    prices = {
-        "sub_10": "5 звезд",
-        "sub_100": "15 звезд", 
-        "sub_1000": "50 звезд",
-        "sub_tg": "100 звезд",
-        "promo_code": "89 звезд"
-    }
-    
-    price = prices.get(subscription_type, "неизвестно")
-    
-    # Симуляция ошибки оплаты (как в ТЗ)
-    await callback.message.edit_text(
-        f"❌ Произошла ошибка!\n\n"
-        f"Мы не смогли найти ваш аккаунт. Пожалуйста, попробуйте оплатить еще раз.\n\n"
-        f"Выбранный тариф: {subscription_type.replace('sub_', '').replace('_', ' ').title()} - {price}",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data="subscription")],
-            [InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_main")]
-        ])
-    )
-    
-    # Уведомление админу о попытке оплаты
-    try:
-        await bot.send_message(
-            ADMIN_ID,
-            f"💰 Попытка оплаты!\n\n"
-            f"Пользователь: @{callback.from_user.username or 'без username'}\n"
-            f"ID: {callback.from_user.id}\n"
-            f"Тариф: {subscription_type}\n"
-            f"Сумма: {price}\n"
-            f"Статус: Ошибка - аккаунт не найден"
-        )
-    except Exception as e:
-        logger.error(f"Ошибка отправки уведомления админу: {e}")
-    
-    await callback.answer()
+# 💬 Обработка вопросов в техподдержку
+@dp.message()
+async def handle_support_message(message: Message):
+    if message.from_user.id in banned_users:
+        await message.answer("Вы забанены.")
+        return
 
-@dp.callback_query(F.data == "back_to_main")
-async def back_to_main_handler(callback: types.CallbackQuery):
-    await callback.message.edit_text(
-        "🎉 Добро пожаловать в наш бот!\n\n"
-        "Здесь вы можете получить доступ к эксклюзивному контенту. "
-        "Выберите нужный раздел ниже:",
-        reply_markup=get_main_menu()
-    )
-    await callback.answer()
-
-# Обработка вопросов для техподдержки
-@dp.message(F.text)
-async def handle_support_question(message: types.Message):
-    user_id = message.from_user.id
-    
-    if user_id in user_questions and user_questions[user_id].get("waiting_for_question"):
+    if message.from_user.id in user_questions:
+        del user_questions[message.from_user.id]  # сбрасываем состояние
         question = message.text
-        
-        # Отправляем вопрос админу
+        user_id = message.from_user.id
+        username = message.from_user.username or f"id{user_id}"
+
         try:
             await bot.send_message(
                 ADMIN_ID,
-                f"❓ Новый вопрос от пользователя:\n\n"
-                f"👤 Пользователь: @{message.from_user.username or 'без username'}\n"
-                f"🆔 ID: {user_id}\n"
-                f"💬 Вопрос: {question}\n\n"
-                f"Действия:\n"
-                f"/mute_{user_id} - Замутить\n"
-                f"/ban_{user_id} - Забанить\n"
-                f"/reply_{user_id} - Ответить"
+                f"📩 Новое сообщение от @{username} (ID: {user_id}):\n\n{question}",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Забанить", callback_data=f"ban_{user_id}")],
+                    [InlineKeyboardButton(text="Ответить", callback_data=f"reply_{user_id}")]
+                ])
             )
-            
-            await message.answer(
-                "✅ Ваш вопрос отправлен администратору! Мы ответим вам в ближайшее время.",
-                reply_markup=get_main_menu()
-            )
-            
+            await message.answer("Ваш вопрос отправлен администратору!")
         except Exception as e:
-            await message.answer(
-                "❌ Произошла ошибка при отправке вопроса. Попробуйте позже.",
-                reply_markup=get_main_menu()
-            )
-            logger.error(f"Ошибка отправки вопроса админу: {e}")
-        
-        # Сбрасываем состояние ожидания вопроса
-        user_questions[user_id]["waiting_for_question"] = False
+            logging.error(f"Не удалось отправить вопрос админу: {e}")
+            await message.answer("Ошибка при отправке. Попробуйте позже.")
+    else:
+        # Игнорируем прочие сообщения
+        pass
 
-# Команды для админа
-@dp.message(Command("mute"))
-async def mute_user(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
+# 💎 Обработка оплаты (имитация)
+@dp.callback_query(F.data.startswith("pay_"))
+async def process_payment(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    if user_id in banned_users:
+        await callback.answer("Вы забанены.", show_alert=True)
         return
-    
-    try:
-        user_id = int(message.text.split()[1])
-        await message.answer(f"Пользователь {user_id} замучен")
-    except (IndexError, ValueError):
-        await message.answer("Использование: /mute <user_id>")
 
-@dp.message(Command("ban"))
-async def ban_user(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
+    # Уведомление админу
+    plan = callback.data.split("_")[1]
+    await bot.send_message(
+        ADMIN_ID,
+        f"🔔 Попытка оплаты от @{callback.from_user.username or f'id{user_id}'}\n"
+        f"Тариф: {plan} видео\n"
+        f"ID пользователя: {user_id}"
+    )
+
+    # ❌ Имитируем ошибку
+    await callback.message.edit_text(
+        "❌ Произошла ошибка!\n"
+        "Мы не смогли найти ваш аккаунт в системе.\n"
+        "Пожалуйста, оплатите ещё раз.",
+        reply_markup=get_subscribe_menu()
+    )
+
+# 🔒 Админка: бан/разбан
+@dp.callback_query(F.data.startswith("ban_"))
+async def ban_user(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
         return
-    
-    try:
-        user_id = int(message.text.split()[1])
-        await message.answer(f"Пользователь {user_id} забанен")
-    except (IndexError, ValueError):
-        await message.answer("Использование: /ban <user_id>")
+    target_id = int(callback.data.split("_")[1])
+    if target_id in banned_users:
+        banned_users.remove(target_id)
+        await callback.answer("Пользователь разбанен!", show_alert=True)
+        await bot.send_message(target_id, "Вы разблокированы!")
+    else:
+        banned_users.add(target_id)
+        await callback.answer("Пользователь забанен!", show_alert=True)
+        await bot.send_message(target_id, "Вы заблокированы администратором.")
 
-@dp.message(Command("reply"))
-async def reply_to_user(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    
-    try:
-        parts = message.text.split(maxsplit=2)
-        user_id = int(parts[1])
-        reply_text = parts[2]
-        
-        await bot.send_message(user_id, f"📨 Ответ от поддержки:\n\n{reply_text}")
-        await message.answer("✅ Ответ отправлен пользователю")
-        
-    except (IndexError, ValueError):
-        await message.answer("Использование: /reply <user_id> <текст>")
-    except Exception as e:
-        await message.answer(f"❌ Ошибка отправки: {e}")
+# 📬 (Опционально) отладка: список забаненных
+@dp.message(Command("banned"))
+async def list_banned(message: Message):
+    if message.from_user.id == ADMIN_ID:
+        if banned_users:
+            await message.answer(f"Забаненные: {banned_users}")
+        else:
+            await message.answer("Нет забаненных.")
 
-# Запуск бота
+# 🚀 Запуск
 async def main():
     await dp.start_polling(bot)
 
