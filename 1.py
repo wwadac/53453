@@ -53,7 +53,6 @@ def init_db():
             value TEXT
         )
     ''')
-    # Настройки по умолчанию
     cursor.execute('INSERT OR IGNORE INTO admin_settings (key, value) VALUES ("new_users_notifications", "on")')
     conn.commit()
     conn.close()
@@ -84,34 +83,15 @@ def set_admin_setting(key, value):
 
 async def notify_admin(context: ContextTypes.DEFAULT_TYPE, message: str):
     try:
-        await context.bot.send_message(ADMIN_ID, message)
-    except:
-        pass
-
-async def notify_new_user(user):
-    """Уведомление о новом пользователе"""
-    if get_admin_setting("new_users_notifications") == "on":
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        message = f"""🆕 *НОВЫЙ ПОЛЬЗОВАТЕЛЬ*
-
-👤 Имя: {user.first_name}
-📛 Ник: @{user.username}
-🆔 ID: `{user.id}`
-🕐 Время: {current_time}"""
-        
-        try:
-            from telegram.ext import ApplicationBuilder
-            app = ApplicationBuilder().token(BOT_TOKEN).build()
-            await app.bot.send_message(ADMIN_ID, message, parse_mode='Markdown')
-        except:
-            pass
+        await context.bot.send_message(ADMIN_ID, message, parse_mode='Markdown')
+    except Exception as e:
+        logging.error(f"Ошибка отправки админу: {e}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
     conn = sqlite3.connect('payments.db')
     cursor = conn.cursor()
     
-    # Проверяем новый ли пользователь
     cursor.execute('SELECT * FROM users WHERE user_id = ?', (user.id,))
     existing_user = cursor.fetchone()
     
@@ -120,9 +100,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
     conn.close()
     
-    # Уведомляем админа о новом пользователе
-    if not existing_user:
-        await notify_new_user(user)
+    if not existing_user and get_admin_setting("new_users_notifications") == "on":
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        message = f"""🆕 *НОВЫЙ ПОЛЬЗОВАТЕЛЬ*
+
+👤 Имя: {user.first_name}
+📛 Ник: @{user.username or 'нет'}
+🆔 ID: `{user.id}`
+🕐 Время: {current_time}"""
+        await notify_admin(context, message)
 
     keyboard = [
         [InlineKeyboardButton("🌟 Premium Подписка - 70 звезд", callback_data="premium")],
@@ -200,16 +186,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             prices=[{"label": "Stars", "amount": product["price"]}],
         )
 
-# Админские инлайн кнопки
+# Админские команды
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != ADMIN_ID:
         return
 
+    notifications_status = "🔔 ВКЛ" if get_admin_setting("new_users_notifications") == "on" else "🔕 ВЫКЛ"
+    
     keyboard = [
         [InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")],
         [InlineKeyboardButton("📢 Быстрая рассылка", callback_data="quick_broadcast")],
-        [InlineKeyboardButton("🔔 Уведомления ВКЛ", callback_data="notifications_off"), 
-         InlineKeyboardButton("🔕 Уведомления ВЫКЛ", callback_data="notifications_on")],
+        [InlineKeyboardButton(f"{notifications_status} Уведомления", callback_data="toggle_notifications")],
         [InlineKeyboardButton("👥 Последние пользователи", callback_data="recent_users")],
         [InlineKeyboardButton("💰 Последние платежи", callback_data="recent_payments")]
     ]
@@ -220,7 +207,7 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 Выберите действие:"""
     await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
 
-async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
@@ -253,19 +240,23 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 ⭐ Всего звезд: {total_stars}
 🆕 Новых сегодня: {new_today}"""
 
-        await query.edit_message_text(text, parse_mode='Markdown')
+        keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="back_admin")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
 
     elif query.data == "quick_broadcast":
         context.user_data['awaiting_broadcast'] = True
-        await query.edit_message_text("📢 *Быстрая рассылка*\n\nВведите сообщение для рассылки:")
+        keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="back_admin")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text("📢 *Быстрая рассылка*\n\nВведите сообщение для рассылки:", reply_markup=reply_markup, parse_mode='Markdown')
 
-    elif query.data == "notifications_on":
-        set_admin_setting("new_users_notifications", "on")
-        await query.edit_message_text("✅ Уведомления о новых пользователях ВКЛЮЧЕНЫ")
-
-    elif query.data == "notifications_off":
-        set_admin_setting("new_users_notifications", "off")
-        await query.edit_message_text("✅ Уведомления о новых пользователях ВЫКЛЮЧЕНЫ")
+    elif query.data == "toggle_notifications":
+        current_status = get_admin_setting("new_users_notifications")
+        new_status = "off" if current_status == "on" else "on"
+        set_admin_setting("new_users_notifications", new_status)
+        
+        status_text = "ВКЛЮЧЕНЫ" if new_status == "on" else "ВЫКЛЮЧЕНЫ"
+        await query.edit_message_text(f"✅ Уведомления о новых пользователях {status_text}")
 
     elif query.data == "recent_users":
         conn = sqlite3.connect('payments.db')
@@ -281,9 +272,11 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         text = "👥 *Последние 10 пользователей:*\n\n"
         for user in users:
             user_id, username, first_name, join_date = user
-            text += f"👤 {first_name} (@{username})\n🆔 {user_id}\n🕐 {join_date}\n\n"
+            text += f"👤 {first_name} (@{username or 'нет'})\n🆔 {user_id}\n🕐 {join_date}\n\n"
 
-        await query.edit_message_text(text)
+        keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="back_admin")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, reply_markup=reply_markup)
 
     elif query.data == "recent_payments":
         conn = sqlite3.connect('payments.db')
@@ -301,17 +294,42 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             user_id, amount, product_name, timestamp = payment
             text += f"👤 {user_id}\n💎 {amount} звезд\n📦 {product_name}\n🕐 {timestamp}\n\n"
 
-        await query.edit_message_text(text)
+        keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="back_admin")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, reply_markup=reply_markup)
 
-# Обработчик текстовых сообщений для техподдержки
-async def handle_support_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    elif query.data == "back_admin":
+        await admin_panel_callback(update, context)
+
+async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    notifications_status = "🔔 ВКЛ" if get_admin_setting("new_users_notifications") == "on" else "🔕 ВЫКЛ"
+    
+    keyboard = [
+        [InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")],
+        [InlineKeyboardButton("📢 Быстрая рассылка", callback_data="quick_broadcast")],
+        [InlineKeyboardButton(f"{notifications_status} Уведомления", callback_data="toggle_notifications")],
+        [InlineKeyboardButton("👥 Последние пользователи", callback_data="recent_users")],
+        [InlineKeyboardButton("💰 Последние платежи", callback_data="recent_payments")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    text = """👑 *Панель администратора*
+
+Выберите действие:"""
+    await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+
+# Обработчик текстовых сообщений
+async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    
     if context.user_data.get('awaiting_support'):
         user = update.message.from_user
         question = update.message.text
 
         admin_msg = f"""💬 *НОВЫЙ ВОПРОС В ТЕХПОДДЕРЖКУ*
 
-👤 Пользователь: {user.first_name} (@{user.username})
+👤 Пользователь: {user.first_name} (@{user.username or 'нет'})
 🆔 ID: {user.id}
 🕐 Время: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
@@ -322,7 +340,7 @@ async def handle_support_message(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text("✅ Ваш вопрос отправлен администратору. Ожидайте ответа в ближайшее время!")
         context.user_data.pop('awaiting_support', None)
 
-    elif context.user_data.get('awaiting_broadcast') and update.message.from_user.id == ADMIN_ID:
+    elif context.user_data.get('awaiting_broadcast') and user_id == ADMIN_ID:
         message = update.message.text
         conn = sqlite3.connect('payments.db')
         cursor = conn.cursor()
@@ -331,15 +349,16 @@ async def handle_support_message(update: Update, context: ContextTypes.DEFAULT_T
         conn.close()
 
         sent = 0
+        failed = 0
         for user in users:
             try:
                 await context.bot.send_message(user[0], f"📢 *Рассылка:*\n\n{message}", parse_mode='Markdown')
                 sent += 1
             except:
-                continue
+                failed += 1
 
         context.user_data.pop('awaiting_broadcast', None)
-        await update.message.reply_text(f"✅ Сообщение отправлено {sent} пользователям")
+        await update.message.reply_text(f"✅ Рассылка завершена!\n\n📤 Отправлено: {sent}\n❌ Не отправлено: {failed}")
 
 async def pre_checkout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.pre_checkout_query
@@ -365,7 +384,7 @@ async def successful_payment_handler(update: Update, context: ContextTypes.DEFAU
 
     admin_msg = f"""💰 *НОВАЯ ОПЛАТА*
 
-👤 Пользователь: {user.first_name} (@{user.username})
+👤 Пользователь: {user.first_name} (@{user.username or 'нет'})
 🆔 ID: {user.id}
 📦 Товар: {PRODUCTS[payment.invoice_payload]['name']}
 💎 Сумма: {payment.total_amount} звезд
@@ -383,194 +402,21 @@ async def successful_payment_handler(update: Update, context: ContextTypes.DEFAU
 
     await update.message.reply_text(user_msg, parse_mode='Markdown')
 
-# Существующие админ команды (оставлены для обратной совместимости)
-async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id != ADMIN_ID:
-        return
-
-    conn = sqlite3.connect('payments.db')
-    cursor = conn.cursor()
-
-    cursor.execute('SELECT COUNT(*) FROM users')
-    total_users = cursor.fetchone()[0]
-
-    cursor.execute('SELECT COUNT(*) FROM payments')
-    total_payments = cursor.fetchone()[0]
-
-    cursor.execute('SELECT SUM(amount) FROM payments')
-    total_stars = cursor.fetchone()[0] or 0
-
-    cursor.execute('SELECT COUNT(*) FROM users WHERE has_subscription = TRUE')
-    premium_users = cursor.fetchone()[0]
-
-    conn.close()
-
-    text = f"""👑 *Статистика админа*
-
-👥 Всего пользователей: {total_users}
-💎 Премиум пользователей: {premium_users}
-💰 Всего платежей: {total_payments}
-⭐ Всего звезд: {total_stars}"""
-
-    await update.message.reply_text(text, parse_mode='Markdown')
-
-async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id != ADMIN_ID:
-        return
-
-    if not context.args:
-        await update.message.reply_text("❌ Используй: /ban <user_id>")
-        return
-
-    try:
-        user_id = int(context.args[0])
-        conn = sqlite3.connect('payments.db')
-        cursor = conn.cursor()
-        cursor.execute('UPDATE users SET is_banned = TRUE WHERE user_id = ?', (user_id,))
-        conn.commit()
-        conn.close()
-
-        await update.message.reply_text(f"✅ Пользователь {user_id} забанен")
-    except:
-        await update.message.reply_text("❌ Ошибка")
-
-async def unban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id != ADMIN_ID:
-        return
-
-    if not context.args:
-        await update.message.reply_text("❌ Используй: /unban <user_id>")
-        return
-
-    try:
-        user_id = int(context.args[0])
-        conn = sqlite3.connect('payments.db')
-        cursor = conn.cursor()
-        cursor.execute('UPDATE users SET is_banned = FALSE WHERE user_id = ?', (user_id,))
-        conn.commit()
-        conn.close()
-
-        await update.message.reply_text(f"✅ Пользователь {user_id} разбанен")
-    except:
-        await update.message.reply_text("❌ Ошибка")
-
-async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id != ADMIN_ID:
-        return
-
-    if not context.args:
-        await update.message.reply_text("❌ Используй: /broadcast <сообщение>")
-        return
-
-    message = ' '.join(context.args)
-    conn = sqlite3.connect('payments.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT user_id FROM users WHERE is_banned = FALSE')
-    users = cursor.fetchall()
-    conn.close()
-
-    sent = 0
-    for user in users:
-        try:
-            await context.bot.send_message(user[0], f"📢 Рассылка:\n\n{message}")
-            sent += 1
-        except:
-            continue
-
-    await update.message.reply_text(f"✅ Сообщение отправлено {sent} пользователям")
-
-async def reply_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id != ADMIN_ID:
-        return
-
-    if len(context.args) < 2:
-        await update.message.reply_text("❌ Используй: /reply <user_id> <сообщение>")
-        return
-
-    try:
-        user_id = int(context.args[0])
-        message = ' '.join(context.args[1:])
-
-        await context.bot.send_message(user_id, f"💬 Ответ от администратора:\n\n{message}")
-        await update.message.reply_text(f"✅ Ответ отправлен пользователю {user_id}")
-    except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка: {e}")
-
-async def refund(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id != ADMIN_ID:
-        return
-
-    if len(context.args) < 2:
-        await update.message.reply_text("❌ Используй: /refund <charge_id> <amount>")
-        return
-
-    try:
-        charge_id = context.args[0]
-        amount = int(context.args[1])
-
-        conn = sqlite3.connect('payments.db')
-        cursor = conn.cursor()
-        cursor.execute('SELECT user_id, amount FROM payments WHERE charge_id = ?', (charge_id,))
-        payment = cursor.fetchone()
-        conn.close()
-
-        if not payment:
-            await update.message.reply_text("❌ Платеж не найден")
-            return
-
-        user_id, paid_amount = payment
-        if amount > paid_amount:
-            await update.message.reply_text(f"❌ Нельзя вернуть больше {paid_amount} звезд")
-            return
-
-        result = await context.bot.refund_star_payment(
-            user_id=user_id,
-            telegram_payment_charge_id=charge_id,
-            star_count=amount
-        )
-
-        await update.message.reply_text(f"✅ Возвращено {amount} звезд пользователю {user_id}")
-    except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка: {e}")
-
-async def show_payments(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id != ADMIN_ID:
-        return
-
-    conn = sqlite3.connect('payments.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT user_id, charge_id, amount, product_name, timestamp FROM payments ORDER BY id DESC LIMIT 10')
-    payments = cursor.fetchall()
-    conn.close()
-
-    if not payments:
-        await update.message.reply_text("📭 Платежей нет")
-        return
-
-    text = "📊 Последние платежи:\n\n"
-    for payment in payments:
-        user_id, charge_id, amount, product_name, timestamp = payment
-        text += f"👤 {user_id}\n💰 {amount} звезд ({product_name})\n🆔 {charge_id}\n🕐 {timestamp}\n\n"
-
-    await update.message.reply_text(text)
-
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
 
+    # Основные команды
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("admin", admin_panel))
-    application.add_handler(CommandHandler("stats", admin_stats))
-    application.add_handler(CommandHandler("ban", ban_user))
-    application.add_handler(CommandHandler("unban", unban_user))
-    application.add_handler(CommandHandler("broadcast", broadcast))
-    application.add_handler(CommandHandler("reply", reply_user))
-    application.add_handler(CommandHandler("refund", refund))
-    application.add_handler(CommandHandler("payments", show_payments))
-    application.add_handler(CallbackQueryHandler(button_handler))
-    application.add_handler(CallbackQueryHandler(admin_button_handler, pattern="^admin_"))
+    
+    # Обработчики callback
+    application.add_handler(CallbackQueryHandler(button_handler, pattern="^(premium|videos|support|about|back_main|video_100|video_1000|video_10000)$"))
+    application.add_handler(CallbackQueryHandler(admin_callback_handler, pattern="^(admin_stats|quick_broadcast|toggle_notifications|recent_users|recent_payments|back_admin)$"))
+    
+    # Обработчики сообщений
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages))
     application.add_handler(PreCheckoutQueryHandler(pre_checkout_handler))
     application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_support_message))
 
     application.run_polling()
 
