@@ -10,8 +10,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Токен бота и ID админа
-BOT_TOKEN = "YOUR_BOT_TOKEN"
-ADMIN_ID = YOUR_ADMIN_ID  # Замените на ваш ID в Telegram
+BOT_TOKEN = "8399893836:AAEdFVXohBkdM-jOkGf2ngaZ67_s65vQQNA"
+ADMIN_ID = 8000395560  # Замените на ваш ID в Telegram
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -245,4 +245,5 @@ async def main():
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
+
     asyncio.run(main())
