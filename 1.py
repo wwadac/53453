@@ -191,14 +191,12 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != ADMIN_ID:
         return
 
-    notifications_status = "🔔 ВКЛ" if get_admin_setting("new_users_notifications") == "on" else "🔕 ВЫКЛ"
-    
     keyboard = [
         [InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")],
         [InlineKeyboardButton("📢 Быстрая рассылка", callback_data="quick_broadcast")],
-        [InlineKeyboardButton(f"{notifications_status} Уведомления", callback_data="toggle_notifications")],
-        [InlineKeyboardButton("👥 Последние пользователи", callback_data="recent_users")],
-        [InlineKeyboardButton("💰 Последние платежи", callback_data="recent_payments")]
+        [InlineKeyboardButton("🔔 Уведомления ВКЛ", callback_data="notifications_off"), 
+         InlineKeyboardButton("🔕 Уведомления ВЫКЛ", callback_data="notifications_on")],
+        [InlineKeyboardButton("👥 Все пользователи", callback_data="all_users")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -250,18 +248,18 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text("📢 *Быстрая рассылка*\n\nВведите сообщение для рассылки:", reply_markup=reply_markup, parse_mode='Markdown')
 
-    elif query.data == "toggle_notifications":
-        current_status = get_admin_setting("new_users_notifications")
-        new_status = "off" if current_status == "on" else "on"
-        set_admin_setting("new_users_notifications", new_status)
-        
-        status_text = "ВКЛЮЧЕНЫ" if new_status == "on" else "ВЫКЛЮЧЕНЫ"
-        await query.edit_message_text(f"✅ Уведомления о новых пользователях {status_text}")
+    elif query.data == "notifications_on":
+        set_admin_setting("new_users_notifications", "on")
+        await query.edit_message_text("✅ Уведомления о новых пользователях ВКЛЮЧЕНЫ")
 
-    elif query.data == "recent_users":
+    elif query.data == "notifications_off":
+        set_admin_setting("new_users_notifications", "off")
+        await query.edit_message_text("✅ Уведомления о новых пользователях ВЫКЛЮЧЕНЫ")
+
+    elif query.data == "all_users":
         conn = sqlite3.connect('payments.db')
         cursor = conn.cursor()
-        cursor.execute('SELECT user_id, username, first_name, join_date FROM users ORDER BY join_date DESC LIMIT 10')
+        cursor.execute('SELECT user_id, username, first_name, join_date FROM users ORDER BY join_date DESC')
         users = cursor.fetchall()
         conn.close()
 
@@ -269,48 +267,35 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             await query.edit_message_text("📭 Пользователей нет")
             return
 
-        text = "👥 *Последние 10 пользователей:*\n\n"
+        text = f"👥 *Все пользователи ({len(users)}):*\n\n"
         for user in users:
             user_id, username, first_name, join_date = user
             text += f"👤 {first_name} (@{username or 'нет'})\n🆔 {user_id}\n🕐 {join_date}\n\n"
 
         keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="back_admin")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(text, reply_markup=reply_markup)
-
-    elif query.data == "recent_payments":
-        conn = sqlite3.connect('payments.db')
-        cursor = conn.cursor()
-        cursor.execute('SELECT user_id, amount, product_name, timestamp FROM payments ORDER BY timestamp DESC LIMIT 10')
-        payments = cursor.fetchall()
-        conn.close()
-
-        if not payments:
-            await query.edit_message_text("📭 Платежей нет")
-            return
-
-        text = "💰 *Последние 10 платежей:*\n\n"
-        for payment in payments:
-            user_id, amount, product_name, timestamp = payment
-            text += f"👤 {user_id}\n💎 {amount} звезд\n📦 {product_name}\n🕐 {timestamp}\n\n"
-
-        keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="back_admin")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(text, reply_markup=reply_markup)
+        
+        # Разбиваем сообщение если слишком длинное
+        if len(text) > 4096:
+            parts = [text[i:i+4096] for i in range(0, len(text), 4096)]
+            await query.edit_message_text(parts[0], reply_markup=reply_markup)
+            for part in parts[1:]:
+                await context.bot.send_message(chat_id=query.message.chat_id, text=part)
+        else:
+            await query.edit_message_text(text, reply_markup=reply_markup)
 
     elif query.data == "back_admin":
         await admin_panel_callback(update, context)
 
 async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    notifications_status = "🔔 ВКЛ" if get_admin_setting("new_users_notifications") == "on" else "🔕 ВЫКЛ"
     
     keyboard = [
         [InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")],
         [InlineKeyboardButton("📢 Быстрая рассылка", callback_data="quick_broadcast")],
-        [InlineKeyboardButton(f"{notifications_status} Уведомления", callback_data="toggle_notifications")],
-        [InlineKeyboardButton("👥 Последние пользователи", callback_data="recent_users")],
-        [InlineKeyboardButton("💰 Последние платежи", callback_data="recent_payments")]
+        [InlineKeyboardButton("🔔 Уведомления ВКЛ", callback_data="notifications_off"), 
+         InlineKeyboardButton("🔕 Уведомления ВЫКЛ", callback_data="notifications_on")],
+        [InlineKeyboardButton("👥 Все пользователи", callback_data="all_users")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -411,7 +396,7 @@ def main():
     
     # Обработчики callback
     application.add_handler(CallbackQueryHandler(button_handler, pattern="^(premium|videos|support|about|back_main|video_100|video_1000|video_10000)$"))
-    application.add_handler(CallbackQueryHandler(admin_callback_handler, pattern="^(admin_stats|quick_broadcast|toggle_notifications|recent_users|recent_payments|back_admin)$"))
+    application.add_handler(CallbackQueryHandler(admin_callback_handler, pattern="^(admin_stats|quick_broadcast|notifications_on|notifications_off|all_users|back_admin)$"))
     
     # Обработчики сообщений
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages))
