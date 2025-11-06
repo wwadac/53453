@@ -6,7 +6,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, PreCheckoutQueryHandler, MessageHandler, filters
 
 BOT_TOKEN = "8401230506:AAELlpnPJAHhSfQu1fAUZW7VjvWbXFOQYI8"
-ADMIN_ID = 123456789  # Замени на свой ID
+ADMIN_ID = 8000395560  # Замени на свой ID
 
 logging.basicConfig(level=logging.INFO)
 
@@ -406,3 +406,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
