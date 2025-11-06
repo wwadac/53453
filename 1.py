@@ -1,264 +1,239 @@
 import asyncio
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
-from aiogram.filters import Command
-from aiogram.enums import ParseMode
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.context import FSMContext
 import logging
+from aiogram import Bot, Dispatcher, types
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram.utils import executor
 
-# 🔐 Конфигурация
-BOT_TOKEN = "8399893836:AAEdFVXohBkdM-jOkGf2ngaZ67_s65vQQNA"
-ADMIN_ID = 8000395560  # Замените на ваш ID в Telegram
-
-# 📝 Логирование
+# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
+# Токен бота
+API_TOKEN = '8399893836:AAEdFVXohBkdM-jOkGf2ngaZ67_s65vQQNA'
 
-# 🎯 Состояния FSM для техподдержки
-class SupportStates(StatesGroup):
-    waiting_for_question = State()
+# ID админа (замените на ваш)
+ADMIN_ID = 8000395560
 
-# 💬 Статичный текст "Что это такое"
-ABOUT_TEXT = (
-    "Это бот для получения доступа к эксклюзивным видео.\n"
-    "Оплатите подписку звёздами 💎 и получите доступ к контенту!\n"
-    "Все платежи защищены через Telegram Stars."
-)
+# Инициализация бота и диспетчера
+bot = Bot(token=API_TOKEN)
+dp = Dispatcher(bot)
 
-# 📦 Пользовательские данные (в реальном проекте — база данных)
-banned_users = set()
-user_questions = {}  # user_id -> last_question
+# Словарь для хранения вопросов от пользователей (user_id: question)
+user_questions = {}
 
-# 🏠 Главное меню
-def get_main_menu() -> InlineKeyboardMarkup:
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Подписка", callback_data="subscribe")],
-        [InlineKeyboardButton(text="🛠 Техподдержка", callback_data="support")],
-        [InlineKeyboardButton(text="ℹ️ Что это такое", callback_data="about")]
-    ])
-    return kb
+# Основное меню
+def get_main_menu():
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    buttons = [
+        InlineKeyboardButton("💎 Подписка", callback_data="subscription"),
+        InlineKeyboardButton("🛠 Тех поддержка", callback_data="support"),
+        InlineKeyboardButton("❓ Что это такое", callback_data="about")
+    ]
+    keyboard.add(*buttons)
+    return keyboard
 
-# 💳 Меню подписок
-def get_subscribe_menu() -> InlineKeyboardMarkup:
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="10 видео — 5 ⭐", callback_data="pay_10")],
-        [InlineKeyboardButton(text="100 видео — 15 ⭐", callback_data="pay_100")],
-        [InlineKeyboardButton(text="1000 видео — 50 ⭐", callback_data="pay_1000")],
-        [InlineKeyboardButton(text="Назад", callback_data="back_to_main")]
-    ])
-    return kb
+# Меню подписки
+def get_subscription_menu():
+    keyboard = InlineKeyboardMarkup(row_width=1)
+    buttons = [
+        InlineKeyboardButton("10 видео - 5 звезд", callback_data="sub_5"),
+        InlineKeyboardButton("100 видео - 15 звезд", callback_data="sub_15"),
+        InlineKeyboardButton("1000 видео - 50 звезд", callback_data="sub_50"),
+        InlineKeyboardButton("TGK - 100 звезд", callback_data="sub_100"),
+        InlineKeyboardButton("Промокод - 89 звезд", callback_data="promo_89"),
+        InlineKeyboardButton("◀️ Назад", callback_data="back_main")
+    ]
+    keyboard.add(*buttons)
+    return keyboard
 
-# 🔄 Обратно в главное меню
-@dp.callback_query(F.data == "back_to_main")
-async def back_to_main(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
-    await callback.message.edit_text("Главное меню:", reply_markup=get_main_menu())
+# Меню тех поддержки
+def get_support_menu():
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton("◀️ Назад", callback_data="back_main"))
+    return keyboard
 
-# 📱 Команда /start
-@dp.message(Command("start"))
-async def cmd_start(message: Message, state: FSMContext):
-    await state.clear()
-    if message.from_user.id in banned_users:
-        await message.answer("Вы забанены.")
-        return
-    await message.answer("Добро пожаловать!", reply_markup=get_main_menu())
+# Обработчик команды /start
+@dp.message_handler(commands=['start'])
+async def cmd_start(message: types.Message):
+    welcome_text = "Добро пожаловать! Выберите опцию:"
+    await message.answer(welcome_text, reply_markup=get_main_menu())
 
-# 📌 Главное меню: обработка кнопок
-@dp.callback_query(F.data == "subscribe")
-async def show_subscribe(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
-    await callback.message.edit_text(
-        "Выберите тариф:\n\n"
-        "С промокодом «VIP» — скидка 11%! (50 → 45 ⭐)\n"
-        "Но пока доступна только полная цена.",
-        reply_markup=get_subscribe_menu()
-    )
+# Обработчик инлайн кнопок
+@dp.callback_query_handler(lambda c: c.data in ['subscription', 'support', 'about', 'back_main'])
+async def process_callback(callback_query: CallbackQuery):
+    await callback_query.answer()
 
-@dp.callback_query(F.data == "support")
-async def support(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(SupportStates.waiting_for_question)
-    await callback.message.edit_text(
-        "Напишите свой вопрос — я передам его администратору бота!"
-    )
-
-@dp.callback_query(F.data == "about")
-async def about(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
-    await callback.message.edit_text(ABOUT_TEXT, reply_markup=get_main_menu())
-
-# 💬 Обработка вопросов в техподдержку
-@dp.message(SupportStates.waiting_for_question)
-async def handle_support_message(message: Message, state: FSMContext):
-    if message.from_user.id in banned_users:
-        await message.answer("Вы забанены.")
-        await state.clear()
-        return
-
-    question = message.text
-    user_id = message.from_user.id
-    username = message.from_user.username or f"id{user_id}"
-
-    try:
-        await bot.send_message(
-            ADMIN_ID,
-            f"📩 Новое сообщение от @{username} (ID: {user_id}):\n\n{question}",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="Забанить", callback_data=f"ban_{user_id}")],
-                [InlineKeyboardButton(text="Ответить", callback_data=f"reply_{user_id}")]
-            ])
+    if callback_query.data == 'subscription':
+        await bot.edit_message_text(
+            chat_id=callback_query.from_user.id,
+            message_id=callback_query.message.message_id,
+            text="💎 Выберите тип подписки:",
+            reply_markup=get_subscription_menu()
         )
-        await message.answer("✅ Ваш вопрос отправлен администратору!", reply_markup=get_main_menu())
-    except Exception as e:
-        logging.error(f"Не удалось отправить вопрос админу: {e}")
-        await message.answer("❌ Ошибка при отправке. Попробуйте позже.", reply_markup=get_main_menu())
-    
-    await state.clear()
 
-# 💎 Создание инвойса для реальной оплаты Stars
-def create_invoice(plan: str) -> types.Invoice:
-    plans = {
-        "10": {"title": "10 эксклюзивных видео", "description": "Доступ к 10 эксклюзивным видео", "price": 500, "payload": "pay_10"},
-        "100": {"title": "100 эксклюзивных видео", "description": "Доступ к 100 эксклюзивным видео", "price": 1500, "payload": "pay_100"},
-        "1000": {"title": "1000 эксклюзивных видео", "description": "Доступ к 1000 эксклюзивным видео", "price": 5000, "payload": "pay_1000"}
+    elif callback_query.data == 'support':
+        support_text = "🛠 Напишите свой вопрос, и я отправлю его администратору бота!"
+        await bot.edit_message_text(
+            chat_id=callback_query.from_user.id,
+            message_id=callback_query.message.message_id,
+            text=support_text,
+            reply_markup=get_support_menu()
+        )
+
+    elif callback_query.data == 'about':
+        about_text = (
+            "🤖 **Что это такое?**\n\n"
+            "Это бот для доступа к эксклюзивному видео-контенту! "
+            "Вы можете приобрести подписку на различное количество видео "
+            "за звезды Telegram. Выбирайте подходящий тариф и наслаждайтесь контентом!\n\n"
+            "⭐ **Звезды** - это внутренняя валюта Telegram для покупок"
+        )
+        await bot.edit_message_text(
+            chat_id=callback_query.from_user.id,
+            message_id=callback_query.message.message_id,
+            text=about_text,
+            reply_markup=get_support_menu(),
+            parse_mode='Markdown'
+        )
+
+    elif callback_query.data == 'back_main':
+        await bot.edit_message_text(
+            chat_id=callback_query.from_user.id,
+            message_id=callback_query.message.message_id,
+            text="Добро пожаловать! Выберите опцию:",
+            reply_markup=get_main_menu()
+        )
+
+# Обработчик выбора подписки
+@dp.callback_query_handler(lambda c: c.data.startswith('sub_') or c.data.startswith('promo_'))
+async def process_subscription(callback_query: CallbackQuery):
+    await callback_query.answer()
+
+    subscription_data = {
+        'sub_5': {'amount': 5, 'text': '10 видео - 5 звезд'},
+        'sub_15': {'amount': 15, 'text': '100 видео - 15 звезд'},
+        'sub_50': {'amount': 50, 'text': '1000 видео - 50 звезд'},
+        'sub_100': {'amount': 100, 'text': 'TGK - 100 звезд'},
+        'promo_89': {'amount': 89, 'text': 'Промокод - 89 звезд'}
     }
-    
-    plan_data = plans.get(plan, plans["10"])
-    
-    return types.Invoice(
-        title=plan_data["title"],
-        description=plan_data["description"],
-        currency="XTR",  # Telegram Stars
-        prices=[types.LabeledPrice(label=plan_data["title"], amount=plan_data["price"])],
-        payload=plan_data["payload"],
-        provider_token="",  # Для Stars не нужен provider_token
-        start_parameter=f"subscription_{plan}"
-    )
 
-# 💎 Обработка выбора тарифа - создание инвойса
-@dp.callback_query(F.data.startswith("pay_"))
-async def process_payment_selection(callback: CallbackQuery):
-    user_id = callback.from_user.id
-    if user_id in banned_users:
-        await callback.answer("Вы забанены.", show_alert=True)
-        return
+    sub_type = callback_query.data
+    if sub_type in subscription_data:
+        amount = subscription_data[sub_type]['amount']
+        text = subscription_data[sub_type]['text']
 
-    plan = callback.data.split("_")[1]
-    invoice = create_invoice(plan)
-    
-    try:
-        await bot.send_invoice(
-            chat_id=callback.message.chat.id,
-            title=invoice.title,
-            description=invoice.description,
-            payload=invoice.payload,
-            provider_token=invoice.provider_token,
-            currency=invoice.currency,
-            prices=invoice.prices,
-            start_parameter=invoice.start_parameter,
-            need_email=False,
-            need_phone_number=False,
-            need_shipping_address=False,
-            is_flexible=False
-        )
-    except Exception as e:
-        logging.error(f"Ошибка при создании инвойса: {e}")
-        await callback.answer("❌ Ошибка при создании платежа", show_alert=True)
+        # Создаем инвойс для оплаты
+        prices = [types.LabeledPrice(label=text, amount=amount * 100)]  # amount в копейках
 
-# 💰 Обработка успешной оплаты
-@dp.pre_checkout_query()
-async def process_pre_checkout(pre_checkout_query: types.PreCheckoutQuery):
+        try:
+            await bot.send_invoice(
+                chat_id=callback_query.from_user.id,
+                title=f"Оплата: {text}",
+                description=f"Оплата {amount} звезд за подписку",
+                provider_token="YOUR_PROVIDER_TOKEN",  # Замените на ваш токен платежного провайдера
+                currency="XTR",
+                prices=prices,
+                payload=f"subscription_{sub_type}_{callback_query.from_user.id}"
+            )
+        except Exception as e:
+            await bot.send_message(
+                chat_id=callback_query.from_user.id,
+                text="Произошла ошибка при создании счета. Попробуйте позже."
+            )
+
+# Обработчик успешной оплаты
+@dp.pre_checkout_query_handler()
+async def process_pre_checkout_query(pre_checkout_query: types.PreCheckoutQuery):
     await bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
 
-@dp.message(F.successful_payment)
-async def process_successful_payment(message: Message):
+@dp.message_handler(content_types=types.ContentType.SUCCESSFUL_PAYMENT)
+async def process_successful_payment(message: types.Message):
+    payment_info = message.successful_payment
     user_id = message.from_user.id
-    plan = message.successful_payment.invoice_payload
-    
-    # Уведомление админу об успешной оплате
-    await bot.send_message(
-        ADMIN_ID,
-        f"✅ Успешная оплата от @{message.from_user.username or f'id{user_id}'}\n"
-        f"Тариф: {plan}\n"
-        f"Сумма: {message.successful_payment.total_amount / 100} ⭐\n"
-        f"ID пользователя: {user_id}"
-    )
-    
-    # ❌ Имитируем ошибку ПОСЛЕ успешной оплаты
-    await message.answer(
-        "❌ Произошла ошибка!\n"
-        "Мы не смогли найти ваш аккаунт в системе.\n"
-        "Пожалуйста, обратитесь в техподдержку для решения проблемы.\n\n"
-        f"Ваш платеж на {message.successful_payment.total_amount / 100} ⭐ получен, но доступ не активирован.",
-        reply_markup=get_main_menu()
+
+    # Отправляем уведомление админу
+    admin_text = (
+        f"💰 Новое пополнение!\n"
+        f"👤 Пользователь: @{message.from_user.username or 'Нет username'}\n"
+        f"🆔 ID: {user_id}\n"
+        f"💎 Сумма: {payment_info.total_amount / 100} звезд\n"
+        f"💳 Валюта: {payment_info.currency}"
     )
 
-# 🔒 Админка: бан/разбан
-@dp.callback_query(F.data.startswith("ban_"))
-async def ban_user(callback: CallbackQuery):
-    if callback.from_user.id != ADMIN_ID:
-        await callback.answer("Доступ запрещен", show_alert=True)
-        return
-    
-    target_id = int(callback.data.split("_")[1])
-    if target_id in banned_users:
-        banned_users.remove(target_id)
-        await callback.answer("Пользователь разбанен!", show_alert=True)
+    try:
+        await bot.send_message(ADMIN_ID, admin_text)
+    except Exception as e:
+        logging.error(f"Не удалось отправить уведомление админу: {e}")
+
+    # Имитируем ошибку для пользователя
+    error_text = "❌ Произошла ошибка: мы не смогли найти ваш аккаунт. Пожалуйста, оплатите еще раз!"
+    await message.answer(error_text)
+
+# Обработчик сообщений для тех поддержки
+@dp.message_handler(content_types=types.ContentType.TEXT)
+async def handle_text_messages(message: types.Message):
+    user_id = message.from_user.id
+
+    # Если пользователь ранее нажал "Тех поддержка", сохраняем вопрос
+    if user_id in user_questions:
+        question = message.text
+        user_questions[user_id] = question
+
+        # Отправляем вопрос админу
+        admin_question_text = (
+            f"❓ Новый вопрос от пользователя:\n"
+            f"👤 @{message.from_user.username or 'Нет username'}\n"
+            f"🆔 ID: {user_id}\n"
+            f"💬 Вопрос: {question}"
+        )
+
+        # Клавиатура для админа
+        admin_keyboard = InlineKeyboardMarkup()
+        admin_keyboard.add(
+            InlineKeyboardButton("🔇 Замутить", callback_data=f"mute_{user_id}"),
+            InlineKeyboardButton("🚫 Забанить", callback_data=f"ban_{user_id}")
+        )
+
         try:
-            await bot.send_message(target_id, "✅ Вы разблокированы администратором!")
-        except:
-            pass
+            await bot.send_message(ADMIN_ID, admin_question_text, reply_markup=admin_keyboard)
+            await message.answer("✅ Ваш вопрос отправлен администратору! Ожидайте ответа.")
+        except Exception as e:
+            await message.answer("❌ Не удалось отправить вопрос. Попробуйте позже.")
+
+        # Удаляем пользователя из ожидания вопроса
+        del user_questions[user_id]
+
     else:
-        banned_users.add(target_id)
-        await callback.answer("Пользователь забанен!", show_alert=True)
-        try:
-            await bot.send_message(target_id, "❌ Вы заблокированы администратором.")
-        except:
-            pass
-    
-    # Обновляем сообщение админу
-    await callback.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Разбанить" if target_id in banned_users else "Забанить", 
-                            callback_data=f"ban_{target_id}")],
-        [InlineKeyboardButton(text="Ответить", callback_data=f"reply_{target_id}")]
-    ]))
+        # Если это обычное сообщение, показываем главное меню
+        await message.answer("Выберите опцию:", reply_markup=get_main_menu())
 
-# 📬 Ответ админа пользователю (заглушка)
-@dp.callback_query(F.data.startswith("reply_"))
-async def reply_to_user(callback: CallbackQuery):
-    if callback.from_user.id != ADMIN_ID:
-        await callback.answer("Доступ запрещен", show_alert=True)
+# Обработчик действий админа (мут/бан)
+@dp.callback_query_handler(lambda c: c.data.startswith('mute_') or c.data.startswith('ban_'))
+async def process_admin_actions(callback_query: CallbackQuery):
+    await callback_query.answer()
+
+    if str(callback_query.from_user.id) != str(ADMIN_ID):
+        await callback_query.answer("У вас нет прав для этого действия!", show_alert=True)
         return
-    
-    target_id = int(callback.data.split("_")[1])
-    await callback.answer(f"Для ответа пользователю {target_id} используйте команду /reply", show_alert=True)
 
-# 📋 Команда для админа - список забаненных
-@dp.message(Command("banned"))
-async def list_banned(message: Message):
-    if message.from_user.id == ADMIN_ID:
-        if banned_users:
-            banned_list = "\n".join([f"ID: {user_id}" for user_id in banned_users])
-            await message.answer(f"Забаненные пользователи:\n{banned_list}")
-        else:
-            await message.answer("Нет забаненных пользователей.")
+    action, user_id = callback_query.data.split('_')
+    user_id = int(user_id)
 
-# 🔄 Обработка любых сообщений (кроме состояний)
-@dp.message()
-async def handle_other_messages(message: Message, state: FSMContext):
-    current_state = await state.get_state()
-    if current_state is None:  # Если не в состоянии техподдержки
-        if message.from_user.id in banned_users:
-            await message.answer("Вы забанены.")
-            return
-        # Предлагаем главное меню для любых других сообщений
-        await message.answer("Используйте кнопки меню для навигации:", reply_markup=get_main_menu())
+    if action == 'mute':
+        # Здесь логика мута пользователя
+        await bot.send_message(
+            ADMIN_ID,
+            f"Пользователь {user_id} был замьючен"
+        )
+        await callback_query.answer("Пользователь замьючен!")
 
-# 🚀 Запуск
-async def main():
-    await dp.start_polling(bot)
+    elif action == 'ban':
+        # Здесь логика бана пользователя
+        await bot.send_message(
+            ADMIN_ID,
+            f"Пользователь {user_id} был забанен"
+        )
+        await callback_query.answer("Пользователь забанен!")
 
-if __name__ == "__main__":
-    asyncio.run(main())
+# Запуск бота
+if __name__ == '__main__':
+    executor.start_polling(dp, skip_updates=True)
