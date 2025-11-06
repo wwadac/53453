@@ -1,264 +1,408 @@
-import asyncio
 import logging
-from aiogram import Bot, Dispatcher, types
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
-from aiogram.utils import executor
-from aiogram.utils.exceptions import MessageNotModified, BadRequest
+import sqlite3
+import socket
+import sys
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, PreCheckoutQueryHandler, MessageHandler, filters
 
-# Настройка логирования
+BOT_TOKEN = "8401230506:AAELlpnPJAHhSfQu1fAUZW7VjvWbXFOQYI8"
+ADMIN_ID = 123456789  # Замени на свой ID
+
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
-# Токен бота
-API_TOKEN = "8399893836:AAEdFVXohBkdM-jOkGf2ngaZ67_s65vQQNA"
-ADMIN_ID = 8000395560  # Замените на ваш ID в Telegram
-
-# Инициализация бота и диспетчера
-bot = Bot(token=API_TOKEN)
-dp = Dispatcher(bot)
-
-# Словарь для хранения вопросов от пользователей (user_id: question)
-user_questions = {}
-# Словарь для отслеживания состояния пользователей
-user_states = {}
-
-# Основное меню
-def get_main_menu():
-    keyboard = InlineKeyboardMarkup(row_width=2)
-    buttons = [
-        InlineKeyboardButton("💎 Подписка", callback_data="subscription"),
-        InlineKeyboardButton("🛠 Тех поддержка", callback_data="support"),
-        InlineKeyboardButton("❓ Что это такое", callback_data="about")
-    ]
-    keyboard.add(*buttons)
-    return keyboard
-
-# Меню подписки
-def get_subscription_menu():
-    keyboard = InlineKeyboardMarkup(row_width=1)
-    buttons = [
-        InlineKeyboardButton("10 видео - 5 звезд", callback_data="sub_5"),
-        InlineKeyboardButton("100 видео - 15 звезд", callback_data="sub_15"),
-        InlineKeyboardButton("1000 видео - 50 звезд", callback_data="sub_50"),
-        InlineKeyboardButton("TGK - 100 звезд", callback_data="sub_100"),
-        InlineKeyboardButton("Промокод - 89 звезд", callback_data="promo_89"),
-        InlineKeyboardButton("◀️ Назад", callback_data="back_main")
-    ]
-    keyboard.add(*buttons)
-    return keyboard
-
-# Меню тех поддержки
-def get_support_menu():
-    keyboard = InlineKeyboardMarkup()
-    keyboard.add(InlineKeyboardButton("◀️ Назад", callback_data="back_main"))
-    return keyboard
-
-# Безопасное редактирование сообщения
-async def safe_edit_message(callback_query: CallbackQuery, text: str, reply_markup: InlineKeyboardMarkup = None):
+def check_single_instance():
     try:
-        await callback_query.message.edit_text(text, reply_markup=reply_markup)
-    except MessageNotModified:
-        # Игнорируем ошибку, если сообщение не изменилось
-        await callback_query.answer()
-    except BadRequest as e:
-        logger.error(f"Error editing message: {e}")
-        await callback_query.answer("Произошла ошибка. Попробуйте снова.", show_alert=True)
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(('localhost', 12345))
+        return True
+    except socket.error:
+        print("❌ Бот уже запущен! pkill -f python")
+        sys.exit(1)
 
-# Обработчик команды /start
-@dp.message_handler(commands=['start'])
-async def cmd_start(message: types.Message):
-    welcome_text = "Добро пожаловать! Выберите опцию:"
-    user_states[message.from_user.id] = 'main'
-    await message.answer(welcome_text, reply_markup=get_main_menu())
+check_single_instance()
 
-# Обработчик инлайн кнопок
-@dp.callback_query_handler(lambda c: c.data in ['subscription', 'support', 'about', 'back_main'])
-async def process_callback(callback_query: CallbackQuery):
-    user_id = callback_query.from_user.id
-    
-    if callback_query.data == 'subscription':
-        user_states[user_id] = 'subscription'
-        await safe_edit_message(
-            callback_query,
-            "💎 Выберите тип подписки:",
-            get_subscription_menu()
+def init_db():
+    conn = sqlite3.connect('payments.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS payments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            username TEXT,
+            first_name TEXT,
+            charge_id TEXT,
+            amount INTEGER,
+            product_name TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
-    
-    elif callback_query.data == 'support':
-        user_states[user_id] = 'support'
-        support_text = "🛠 Напишите свой вопрос, и я отправлю его администратору бота!"
-        await safe_edit_message(
-            callback_query,
-            support_text,
-            get_support_menu()
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            first_name TEXT,
+            is_banned BOOLEAN DEFAULT FALSE,
+            has_subscription BOOLEAN DEFAULT FALSE,
+            join_date DATETIME DEFAULT CURRENT_TIMESTAMP
         )
-    
-    elif callback_query.data == 'about':
-        user_states[user_id] = 'about'
-        about_text = (
-            "🤖 **Что это такое?**\n\n"
-            "Это бот для доступа к эксклюзивному видео-контенту! "
-            "Вы можете приобрести подписку на различное количество видео "
-            "за звезды Telegram. Выбирайте подходящий тариф и наслаждайтесь контентом!\n\n"
-            "⭐ **Звезды** - это внутренняя валюта Telegram для покупок"
-        )
-        await safe_edit_message(
-            callback_query,
-            about_text,
-            get_support_menu()
-        )
-    
-    elif callback_query.data == 'back_main':
-        user_states[user_id] = 'main'
-        await safe_edit_message(
-            callback_query,
-            "Добро пожаловать! Выберите опцию:",
-            get_main_menu()
-        )
+    ''')
+    conn.commit()
+    conn.close()
 
-# Обработчик выбора подписки
-@dp.callback_query_handler(lambda c: c.data.startswith('sub_') or c.data.startswith('promo_'))
-async def process_subscription(callback_query: CallbackQuery):
-    await callback_query.answer()
-    
-    subscription_data = {
-        'sub_5': {'amount': 5, 'text': '10 видео - 5 звезд'},
-        'sub_15': {'amount': 15, 'text': '100 видео - 15 звезд'},
-        'sub_50': {'amount': 50, 'text': '1000 видео - 50 звезд'},
-        'sub_100': {'amount': 100, 'text': 'TGK - 100 звезд'},
-        'promo_89': {'amount': 89, 'text': 'Промокод - 89 звезд'}
-    }
-    
-    sub_type = callback_query.data
-    if sub_type in subscription_data:
-        amount = subscription_data[sub_type]['amount']
-        text = subscription_data[sub_type]['text']
-        
-        # Создаем инвойс для оплаты
-        prices = [types.LabeledPrice(label=text, amount=amount * 100)]  # amount в копейках
-        
-        try:
-            await bot.send_invoice(
-                chat_id=callback_query.from_user.id,
-                title=f"Оплата: {text}",
-                description=f"Оплата {amount} звезд за подписку",
-                provider_token="",  # Замените на ваш токен платежного провайдера
-                currency="XTR",
-                prices=prices,
-                payload=f"subscription_{sub_type}_{callback_query.from_user.id}"
-            )
-        except Exception as e:
-            logger.error(f"Error creating invoice: {e}")
-            await bot.send_message(
-                chat_id=callback_query.from_user.id,
-                text="Произошла ошибка при создании счета. Попробуйте позже."
-            )
+init_db()
 
-# Обработчик успешной оплаты
-@dp.pre_checkout_query_handler()
-async def process_pre_checkout_query(pre_checkout_query: types.PreCheckoutQuery):
-    await bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
+PRODUCTS = {
+    "premium": {"name": "🌟 Premium Подписка", "price": 70, "description": "Доступ к приватному каналу на 30 дней"},
+    "video_100": {"name": "🎬 100 Видео", "price": 15, "description": "Пакет из 100 премиум видео"},
+    "video_1000": {"name": "📹 1000 Видео", "price": 25, "description": "Пакет из 1000 премиум видео"},
+    "video_10000": {"name": "🎥 10000 Видео + Канал", "price": 50, "description": "10000 видео + доступ к каналу"}
+}
 
-@dp.message_handler(content_types=types.ContentType.SUCCESSFUL_PAYMENT)
-async def process_successful_payment(message: types.Message):
-    payment_info = message.successful_payment
-    user_id = message.from_user.id
-    
-    # Отправляем уведомление админу
-    admin_text = (
-        f"💰 Новое пополнение!\n"
-        f"👤 Пользователь: @{message.from_user.username or 'Нет username'}\n"
-        f"🆔 ID: {user_id}\n"
-        f"💎 Сумма: {payment_info.total_amount / 100} звезд\n"
-        f"💳 Валюта: {payment_info.currency}"
-    )
-    
+async def notify_admin(context: ContextTypes.DEFAULT_TYPE, message: str):
     try:
-        await bot.send_message(ADMIN_ID, admin_text)
-    except Exception as e:
-        logger.error(f"Не удалось отправить уведомление админу: {e}")
-    
-    # Имитируем ошибку для пользователя
-    error_text = "❌ Произошла ошибка: мы не смогли найти ваш аккаунт. Пожалуйста, оплатите еще раз!"
-    await message.answer(error_text)
+        await context.bot.send_message(ADMIN_ID, message)
+    except:
+        pass
 
-# Обработчик сообщений для тех поддержки
-@dp.message_handler(content_types=types.ContentType.TEXT)
-async def handle_text_messages(message: types.Message):
-    user_id = message.from_user.id
-    
-    # Проверяем, находится ли пользователь в режиме техподдержки
-    if user_states.get(user_id) == 'support' and message.text:
-        question = message.text
-        
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.message.from_user
+    conn = sqlite3.connect('payments.db')
+    cursor = conn.cursor()
+    cursor.execute('INSERT OR IGNORE INTO users (user_id, username, first_name) VALUES (?, ?, ?)',
+                   (user.id, user.username, user.first_name))
+    conn.commit()
+    conn.close()
+
+    keyboard = [
+        [InlineKeyboardButton("🌟 Premium Подписка - 70 звезд", callback_data="premium")],
+        [InlineKeyboardButton("📁 Видео", callback_data="videos")],
+        [InlineKeyboardButton("💬 Тех. Поддержка", callback_data="support")],
+        [InlineKeyboardButton("ℹ️ О боте", callback_data="about")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    text = """🛍️ *Добро пожаловать в магазин!*
+
+Выберите раздел:"""
+    await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "videos":
+        keyboard = [
+            [InlineKeyboardButton("🎬 100 Видео - 15 звезд", callback_data="video_100")],
+            [InlineKeyboardButton("📹 1000 Видео - 25 звезд", callback_data="video_1000")],
+            [InlineKeyboardButton("🎥 10000 Видео + Канал - 50 звезд", callback_data="video_10000")],
+            [InlineKeyboardButton("🔙 Назад", callback_data="back_main")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text("📁 *Раздел с видео*\n\nВыберите пакет:", reply_markup=reply_markup, parse_mode='Markdown')
+
+    elif query.data == "support":
+        # Сохраняем вопрос пользователя
+        context.user_data['awaiting_support'] = True
+        keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="back_main")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        text = """💬 *Техническая поддержка*
+
+Напишите ваш вопрос и администратор скоро ответит.
+
+Просто напишите сообщение с вашим вопросом:"""
+        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+
+    elif query.data == "about":
+        keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="back_main")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        text = """🎁 ЭкcклюzивHый koHтeHт, kotopый Bы He H@йдеTe бoльwе Hигде
+
+Этoт бот oткpывает двеpи к HеoгpaHиченHому пoтoky экcклюzивHогo koHтeHта, дocтуп к kotopому Bы мoжеtе пoлyчить tольkо y Hас! Mы пpеdlагаем дocтупHые, безопасHые и аHоHимHые yсlуги.
+
+🌟 Pрemиum-Подпucка
+Достуp к пpиватHому kаHаlу c более чем 30.000 tыcяч видео подобHогo xаракtера. В cлучае yдаlения осHовHогo kаHаlа, мы гоtовы пpедоставить Bам достуp к доpолHиtельHому!
+
+📁 Видеоrакеты
+РазlичHые pакеты видеомаtеpиалoв pо пpивлекаtеlьHым ценам. Рассмаtрuвайtе этo как возможность опробовать Hаwи yслyги перед tем, kак пpиобpеcти pодписку.
+
+ВозpастHые огpаничения: от 14 до 18 леt."""
+        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+
+    elif query.data == "back_main":
+        context.user_data.pop('awaiting_support', None)
+        keyboard = [
+            [InlineKeyboardButton("🌟 Premium Подписка - 70 звезд", callback_data="premium")],
+            [InlineKeyboardButton("📁 Видео", callback_data="videos")],
+            [InlineKeyboardButton("💬 Тех. Поддержка", callback_data="support")],
+            [InlineKeyboardButton("ℹ️ О боте", callback_data="about")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text("🛍️ *Добро пожаловать в магазин!*\n\nВыберите раздел:", reply_markup=reply_markup, parse_mode='Markdown')
+
+    elif query.data in PRODUCTS:
+        product = PRODUCTS[query.data]
+        await context.bot.send_invoice(
+            chat_id=query.message.chat_id,
+            title=product["name"],
+            description=product["description"],
+            payload=query.data,
+            currency="XTR",
+            prices=[{"label": "Stars", "amount": product["price"]}],
+        )
+
+# Обработчик текстовых сообщений для техподдержки
+async def handle_support_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if context.user_data.get('awaiting_support'):
+        user = update.message.from_user
+        question = update.message.text
+
         # Отправляем вопрос админу
-        admin_question_text = (
-            f"❓ Новый вопрос от пользователя:\n"
-            f"👤 @{message.from_user.username or 'Нет username'}\n"
-            f"🆔 ID: {user_id}\n"
-            f"💬 Вопрос: {question}"
-        )
-        
-        # Клавиатура для админа
-        admin_keyboard = InlineKeyboardMarkup()
-        admin_keyboard.add(
-            InlineKeyboardButton("🔇 Замутить", callback_data=f"mute_{user_id}"),
-            InlineKeyboardButton("🚫 Забанить", callback_data=f"ban_{user_id}")
-        )
-        
-        try:
-            await bot.send_message(ADMIN_ID, admin_question_text, reply_markup=admin_keyboard)
-            await message.answer("✅ Ваш вопрос отправлен администратору! Ожидайте ответа.")
-        except Exception as e:
-            logger.error(f"Error sending question to admin: {e}")
-            await message.answer("❌ Не удалось отправить вопрос. Попробуйте позже.")
-        
-        # Возвращаем в главное меню
-        user_states[user_id] = 'main'
-        await message.answer("Выберите опцию:", reply_markup=get_main_menu())
-    
-    elif message.text and not message.text.startswith('/'):
-        # Если это обычное текстовое сообщение, показываем главное меню
-        user_states[user_id] = 'main'
-        await message.answer("Выберите опцию:", reply_markup=get_main_menu())
+        admin_msg = f"""💬 *НОВЫЙ ВОПРОС В ТЕХПОДДЕРЖКУ*
 
-# Обработчик действий админа (мут/бан)
-@dp.callback_query_handler(lambda c: c.data.startswith('mute_') or c.data.startswith('ban_'))
-async def process_admin_actions(callback_query: CallbackQuery):
-    await callback_query.answer()
-    
-    if str(callback_query.from_user.id) != str(ADMIN_ID):
-        await callback_query.answer("У вас нет прав для этого действия!", show_alert=True)
+👤 Пользователь: {user.first_name} (@{user.username})
+🆔 ID: {user.id}
+
+❓ Вопрос:
+{question}"""
+
+        await notify_admin(context, admin_msg)
+
+        # Подтверждаем пользователю
+        await update.message.reply_text("✅ Ваш вопрос отправлен администратору. Ожидайте ответа в ближайшее время!")
+
+        # Сбрасываем состояние
+        context.user_data.pop('awaiting_support', None)
+
+async def pre_checkout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.pre_checkout_query
+    await query.answer(ok=True)
+
+async def successful_payment_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    payment = update.message.successful_payment
+    user = update.message.from_user
+
+    conn = sqlite3.connect('payments.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO payments (user_id, username, first_name, charge_id, amount, product_name)
+        VALUES (?, ?, ?, ?, ?, ?)
+    ''', (user.id, user.username, user.first_name, payment.telegram_payment_charge_id,
+          payment.total_amount, payment.invoice_payload))
+
+    if payment.invoice_payload == "premium":
+        cursor.execute('UPDATE users SET has_subscription = TRUE WHERE user_id = ?', (user.id,))
+
+    conn.commit()
+    conn.close()
+
+    admin_msg = f"""💰 *НОВАЯ ОПЛАТА*
+
+👤 Пользователь: {user.first_name} (@{user.username})
+🆔 ID: {user.id}
+📦 Товар: {PRODUCTS[payment.invoice_payload]['name']}
+💎 Сумма: {payment.total_amount} звезд
+🆔 Charge ID: {payment.telegram_payment_charge_id}"""
+
+    await notify_admin(context, admin_msg)
+
+    user_msg = f"""✅ *Оплата прошла успешно!*
+
+📦 Товар: {PRODUCTS[payment.invoice_payload]['name']}
+💎 Сумма: {payment.total_amount} звезд
+
+Спасибо за покупку! 🎉"""
+
+    await update.message.reply_text(user_msg, parse_mode='Markdown')
+
+# Админ команды
+async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != ADMIN_ID:
         return
-    
-    action, user_id = callback_query.data.split('_')
-    user_id = int(user_id)
-    
-    if action == 'mute':
-        # Здесь логика мута пользователя
-        await bot.send_message(
-            ADMIN_ID,
-            f"Пользователь {user_id} был замьючен"
-        )
-        await callback_query.answer("Пользователь замьючен!")
-    
-    elif action == 'ban':
-        # Здесь логика бана пользователя
-        await bot.send_message(
-            ADMIN_ID,
-            f"Пользователь {user_id} был забанен"
-        )
-        await callback_query.answer("Пользователь забанен!")
 
-# Обработчик ошибок
-@dp.errors_handler()
-async def errors_handler(update, exception):
-    logger.error(f"Update {update} caused error {exception}")
-    return True
+    conn = sqlite3.connect('payments.db')
+    cursor = conn.cursor()
 
-if __name__ == '__main__':
-    # Убедитесь, что только один экземпляр бота запущен
+    cursor.execute('SELECT COUNT(*) FROM users')
+    total_users = cursor.fetchone()[0]
+
+    cursor.execute('SELECT COUNT(*) FROM payments')
+    total_payments = cursor.fetchone()[0]
+
+    cursor.execute('SELECT SUM(amount) FROM payments')
+    total_stars = cursor.fetchone()[0] or 0
+
+    cursor.execute('SELECT COUNT(*) FROM users WHERE has_subscription = TRUE')
+    premium_users = cursor.fetchone()[0]
+
+    conn.close()
+
+    text = f"""👑 *Статистика админа*
+
+👥 Всего пользователей: {total_users}
+💎 Премиум пользователей: {premium_users}
+💰 Всего платежей: {total_payments}
+⭐ Всего звезд: {total_stars}"""
+
+    await update.message.reply_text(text, parse_mode='Markdown')
+
+async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != ADMIN_ID:
+        return
+
+    if not context.args:
+        await update.message.reply_text("❌ Используй: /ban <user_id>")
+        return
+
     try:
-        executor.start_polling(dp, skip_updates=True, relax=0.1)
+        user_id = int(context.args[0])
+        conn = sqlite3.connect('payments.db')
+        cursor = conn.cursor()
+        cursor.execute('UPDATE users SET is_banned = TRUE WHERE user_id = ?', (user_id,))
+        conn.commit()
+        conn.close()
+
+        await update.message.reply_text(f"✅ Пользователь {user_id} забанен")
+    except:
+        await update.message.reply_text("❌ Ошибка")
+
+async def unban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != ADMIN_ID:
+        return
+
+    if not context.args:
+        await update.message.reply_text("❌ Используй: /unban <user_id>")
+        return
+
+    try:
+        user_id = int(context.args[0])
+        conn = sqlite3.connect('payments.db')
+        cursor = conn.cursor()
+        cursor.execute('UPDATE users SET is_banned = FALSE WHERE user_id = ?', (user_id,))
+        conn.commit()
+        conn.close()
+
+        await update.message.reply_text(f"✅ Пользователь {user_id} разбанен")
+    except:
+        await update.message.reply_text("❌ Ошибка")
+
+async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != ADMIN_ID:
+        return
+
+    if not context.args:
+        await update.message.reply_text("❌ Используй: /broadcast <сообщение>")
+        return
+
+    message = ' '.join(context.args)
+    conn = sqlite3.connect('payments.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT user_id FROM users WHERE is_banned = FALSE')
+    users = cursor.fetchall()
+    conn.close()
+
+    sent = 0
+    for user in users:
+        try:
+            await context.bot.send_message(user[0], f"📢 Рассылка:\n\n{message}")
+            sent += 1
+        except:
+            continue
+
+    await update.message.reply_text(f"✅ Сообщение отправлено {sent} пользователям")
+
+# Команда для ответа пользователю
+async def reply_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != ADMIN_ID:
+        return
+
+    if len(context.args) < 2:
+        await update.message.reply_text("❌ Используй: /reply <user_id> <сообщение>")
+        return
+
+    try:
+        user_id = int(context.args[0])
+        message = ' '.join(context.args[1:])
+
+        await context.bot.send_message(user_id, f"💬 Ответ от администратора:\n\n{message}")
+        await update.message.reply_text(f"✅ Ответ отправлен пользователю {user_id}")
     except Exception as e:
-        logger.error(f"Bot crashed: {e}")
+        await update.message.reply_text(f"❌ Ошибка: {e}")
+
+async def refund(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != ADMIN_ID:
+        return
+
+    if len(context.args) < 2:
+        await update.message.reply_text("❌ Используй: /refund <charge_id> <amount>")
+        return
+
+    try:
+        charge_id = context.args[0]
+        amount = int(context.args[1])
+
+        conn = sqlite3.connect('payments.db')
+        cursor = conn.cursor()
+        cursor.execute('SELECT user_id, amount FROM payments WHERE charge_id = ?', (charge_id,))
+        payment = cursor.fetchone()
+        conn.close()
+
+        if not payment:
+            await update.message.reply_text("❌ Платеж не найден")
+            return
+
+        user_id, paid_amount = payment
+        if amount > paid_amount:
+            await update.message.reply_text(f"❌ Нельзя вернуть больше {paid_amount} звезд")
+            return
+
+        result = await context.bot.refund_star_payment(
+            user_id=user_id,
+            telegram_payment_charge_id=charge_id,
+            star_count=amount
+        )
+
+        await update.message.reply_text(f"✅ Возвращено {amount} звезд пользователю {user_id}")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
+
+async def show_payments(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != ADMIN_ID:
+        return
+
+    conn = sqlite3.connect('payments.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT user_id, charge_id, amount, product_name, timestamp FROM payments ORDER BY id DESC LIMIT 10')
+    payments = cursor.fetchall()
+    conn.close()
+
+    if not payments:
+        await update.message.reply_text("📭 Платежей нет")
+        return
+
+    text = "📊 Последние платежи:\n\n"
+    for payment in payments:
+        user_id, charge_id, amount, product_name, timestamp = payment
+        text += f"👤 {user_id}\n💰 {amount} звезд ({product_name})\n🆔 {charge_id}\n🕐 {timestamp}\n\n"
+
+    await update.message.reply_text(text)
+
+def main():
+    application = Application.builder().token(BOT_TOKEN).build()
+
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("stats", admin_stats))
+    application.add_handler(CommandHandler("ban", ban_user))
+    application.add_handler(CommandHandler("unban", unban_user))
+    application.add_handler(CommandHandler("broadcast", broadcast))
+    application.add_handler(CommandHandler("reply", reply_user))
+    application.add_handler(CommandHandler("refund", refund))
+    application.add_handler(CommandHandler("payments", show_payments))
+    application.add_handler(CallbackQueryHandler(button_handler))
+    application.add_handler(PreCheckoutQueryHandler(pre_checkout_handler))
+    application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_support_message))
+
+    application.run_polling()
+
+if __name__ == "__main__":
+    main()
