@@ -2,6 +2,8 @@ import logging
 import sqlite3
 import socket
 import sys
+import os
+import tempfile
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, PreCheckoutQueryHandler, MessageHandler, filters
 from datetime import datetime
@@ -86,6 +88,126 @@ async def notify_admin(context: ContextTypes.DEFAULT_TYPE, message: str):
         await context.bot.send_message(ADMIN_ID, message, parse_mode='Markdown')
     except Exception as e:
         logging.error(f"Ошибка отправки админу: {e}")
+
+# Команда для скачивания базы данных
+async def download_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != ADMIN_ID:
+        return
+    
+    try:
+        # Создаем временную копию базы данных
+        with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as temp_file:
+            temp_path = temp_file.name
+        
+        # Копируем базу данных во временный файл
+        import shutil
+        shutil.copy2('payments.db', temp_path)
+        
+        # Отправляем файл
+        with open(temp_path, 'rb') as db_file:
+            await update.message.reply_document(
+                document=db_file,
+                filename='payments.db',
+                caption='📦 База данных бота'
+            )
+        
+        # Удаляем временный файл
+        os.unlink(temp_path)
+        
+        await update.message.reply_text("✅ База данных успешно отправлена!")
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка при выгрузке базы данных: {e}")
+
+# Команда для загрузки базы данных
+async def upload_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != ADMIN_ID:
+        return
+    
+    if not update.message.document:
+        await update.message.reply_text("❌ Пожалуйста, отправьте файл базы данных (.db)")
+        return
+    
+    document = update.message.document
+    
+    # Проверяем что это файл базы данных
+    if not document.file_name.endswith('.db'):
+        await update.message.reply_text("❌ Пожалуйста, отправьте файл с расширением .db")
+        return
+    
+    try:
+        # Скачиваем файл
+        file = await context.bot.get_file(document.file_id)
+        
+        # Создаем временный файл
+        with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as temp_file:
+            temp_path = temp_file.name
+        
+        # Скачиваем во временный файл
+        await file.download_to_drive(temp_path)
+        
+        # Проверяем что файл является валидной SQLite базой
+        try:
+            test_conn = sqlite3.connect(temp_path)
+            test_cursor = test_conn.cursor()
+            
+            # Проверяем наличие основных таблиц
+            test_cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('users', 'payments', 'admin_settings')")
+            tables = test_cursor.fetchall()
+            
+            if len(tables) < 3:
+                await update.message.reply_text("❌ Файл не содержит все необходимые таблицы!")
+                os.unlink(temp_path)
+                return
+                
+            test_conn.close()
+            
+        except sqlite3.Error as e:
+            await update.message.reply_text(f"❌ Файл не является валидной SQLite базой данных: {e}")
+            os.unlink(temp_path)
+            return
+        
+        # Создаем бэкап текущей базы
+        backup_path = f'payments_backup_{datetime.now().strftime("%Y%m%d_%H%M%S")}.db'
+        import shutil
+        shutil.copy2('payments.db', backup_path)
+        
+        # Заменяем текущую базу данных
+        shutil.copy2(temp_path, 'payments.db')
+        
+        # Удаляем временный файл
+        os.unlink(temp_path)
+        
+        await update.message.reply_text(
+            f"✅ База данных успешно обновлена!\n"
+            f"📁 Бэкап сохранен как: {backup_path}"
+        )
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка при загрузке базы данных: {e}")
+
+# Команда для создания бэкапа
+async def backup_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != ADMIN_ID:
+        return
+    
+    try:
+        backup_path = f'payments_backup_{datetime.now().strftime("%Y%m%d_%H%M%S")}.db'
+        import shutil
+        shutil.copy2('payments.db', backup_path)
+        
+        # Отправляем бэкап
+        with open(backup_path, 'rb') as backup_file:
+            await update.message.reply_document(
+                document=backup_file,
+                filename=os.path.basename(backup_path),
+                caption='💾 Бэкап базы данных'
+            )
+        
+        await update.message.reply_text("✅ Бэкап создан и отправлен!")
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка при создании бэкапа: {e}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
@@ -196,11 +318,12 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📢 Быстрая рассылка", callback_data="quick_broadcast")],
         [InlineKeyboardButton("🔔 Уведомления ВКЛ", callback_data="notifications_off"), 
          InlineKeyboardButton("🔕 Уведомления ВЫКЛ", callback_data="notifications_on")],
-        [InlineKeyboardButton("👥 Все пользователи", callback_data="all_users")]
+        [InlineKeyboardButton("👥 Все пользователи", callback_data="all_users")],
+        [InlineKeyboardButton("💾 Управление БД", callback_data="db_management")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    text = """👑 *Панель администратора*
+    text = """ *Панель администратора*
 
 Выберите действие:"""
     await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
@@ -284,8 +407,74 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         else:
             await query.edit_message_text(text, reply_markup=reply_markup)
 
+    elif query.data == "db_management":
+        keyboard = [
+            [InlineKeyboardButton("📥 Скачать БД", callback_data="download_db")],
+            [InlineKeyboardButton("💾 Создать бэкап", callback_data="backup_db")],
+            [InlineKeyboardButton("🔙 Назад", callback_data="back_admin")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text("💾 *Управление базой данных*\n\nВыберите действие:", reply_markup=reply_markup, parse_mode='Markdown')
+
+    elif query.data == "download_db":
+        await query.edit_message_text("📥 Скачиваю базу данных...")
+        await download_db_callback(update, context)
+
+    elif query.data == "backup_db":
+        await query.edit_message_text("💾 Создаю бэкап...")
+        await backup_db_callback(update, context)
+
     elif query.data == "back_admin":
         await admin_panel_callback(update, context)
+
+async def download_db_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    try:
+        # Создаем временную копию базы данных
+        with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as temp_file:
+            temp_path = temp_file.name
+        
+        # Копируем базу данных во временный файл
+        import shutil
+        shutil.copy2('payments.db', temp_path)
+        
+        # Отправляем файл
+        with open(temp_path, 'rb') as db_file:
+            await context.bot.send_document(
+                chat_id=query.message.chat_id,
+                document=db_file,
+                filename='payments.db',
+                caption='📦 База данных бота'
+            )
+        
+        # Удаляем временный файл
+        os.unlink(temp_path)
+        
+        await query.edit_message_text("✅ База данных успешно отправлена!")
+        
+    except Exception as e:
+        await query.edit_message_text(f"❌ Ошибка при выгрузке базы данных: {e}")
+
+async def backup_db_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    try:
+        backup_path = f'payments_backup_{datetime.now().strftime("%Y%m%d_%H%M%S")}.db'
+        import shutil
+        shutil.copy2('payments.db', backup_path)
+        
+        # Отправляем бэкап
+        with open(backup_path, 'rb') as backup_file:
+            await context.bot.send_document(
+                chat_id=query.message.chat_id,
+                document=backup_file,
+                filename=os.path.basename(backup_path),
+                caption='💾 Бэкап базы данных'
+            )
+        
+        await query.edit_message_text("✅ Бэкап создан и отправлен!")
+        
+    except Exception as e:
+        await query.edit_message_text(f"❌ Ошибка при создании бэкапа: {e}")
 
 async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -295,7 +484,8 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         [InlineKeyboardButton("📢 Быстрая рассылка", callback_data="quick_broadcast")],
         [InlineKeyboardButton("🔔 Уведомления ВКЛ", callback_data="notifications_off"), 
          InlineKeyboardButton("🔕 Уведомления ВЫКЛ", callback_data="notifications_on")],
-        [InlineKeyboardButton("👥 Все пользователи", callback_data="all_users")]
+        [InlineKeyboardButton("👥 Все пользователи", callback_data="all_users")],
+        [InlineKeyboardButton("💾 Управление БД", callback_data="db_management")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -407,23 +597,6 @@ async def tell_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {e}")
 
-# Команда для ответа на последний вопрос (удобно для быстрого ответа)
-async def quick_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id != ADMIN_ID:
-        return
-
-    if not context.args:
-        await update.message.reply_text("❌ Используй: /quick <сообщение>")
-        return
-
-    # Здесь можно добавить логику для получения последнего вопроса
-    # Пока просто запрашиваем ID пользователя
-    context.user_data['awaiting_quick_reply'] = True
-    message = ' '.join(context.args)
-    context.user_data['quick_reply_message'] = message
-    
-    await update.message.reply_text("📝 Введите ID пользователя для ответа:")
-
 async def pre_checkout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.pre_checkout_query
     await query.answer(ok=True)
@@ -476,14 +649,17 @@ def main():
     # Новые команды для админа
     application.add_handler(CommandHandler("reply", reply_to_user))
     application.add_handler(CommandHandler("tell", tell_user))
-    application.add_handler(CommandHandler("quick", quick_reply))
+    application.add_handler(CommandHandler("download_db", download_db))
+    application.add_handler(CommandHandler("backup_db", backup_db))
+    application.add_handler(CommandHandler("upload_db", upload_db))
     
     # Обработчики callback
     application.add_handler(CallbackQueryHandler(button_handler, pattern="^(premium|videos|support|about|back_main|video_100|video_1000|video_10000)$"))
-    application.add_handler(CallbackQueryHandler(admin_callback_handler, pattern="^(admin_stats|quick_broadcast|notifications_on|notifications_off|all_users|back_admin)$"))
+    application.add_handler(CallbackQueryHandler(admin_callback_handler, pattern="^(admin_stats|quick_broadcast|notifications_on|notifications_off|all_users|back_admin|db_management|download_db|backup_db)$"))
     
     # Обработчики сообщений
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages))
+    application.add_handler(MessageHandler(filters.Document.ALL, upload_db))  # Обработчик загрузки файлов
     application.add_handler(PreCheckoutQueryHandler(pre_checkout_handler))
     application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler))
 
