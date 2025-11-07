@@ -590,7 +590,7 @@ async def tell_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await context.bot.send_message(
             user_id, 
-            f"👑 *АДМИНИСТРАТОР:*\n\n{message}", 
+            f" *АДМИНИСТРАТОР:*\n\n{message}", 
             parse_mode='Markdown'
         )
         await update.message.reply_text(f"✅ Сообщение отправлено пользователю {user_id}")
@@ -667,3 +667,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
