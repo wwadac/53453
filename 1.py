@@ -345,6 +345,85 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         context.user_data.pop('awaiting_broadcast', None)
         await update.message.reply_text(f"✅ Рассылка завершена!\n\n📤 Отправлено: {sent}\n❌ Не отправлено: {failed}")
 
+    # Обработка ответов админа на вопросы
+    elif context.user_data.get('awaiting_reply') and user_id == ADMIN_ID:
+        user_id_to_reply = context.user_data.get('reply_user_id')
+        message = update.message.text
+        
+        try:
+            await context.bot.send_message(
+                user_id_to_reply, 
+                f"💬 *ОТВЕТ АДМИНИСТРАТОРА:*\n\n{message}", 
+                parse_mode='Markdown'
+            )
+            await update.message.reply_text(f"✅ Ответ отправлен пользователю {user_id_to_reply}")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Ошибка отправки: {e}")
+        
+        context.user_data.pop('awaiting_reply', None)
+        context.user_data.pop('reply_user_id', None)
+
+# Команда для ответа на вопросы техподдержки
+async def reply_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != ADMIN_ID:
+        return
+
+    if len(context.args) < 2:
+        await update.message.reply_text("❌ Используй: /reply <user_id> <сообщение>")
+        return
+
+    try:
+        user_id = int(context.args[0])
+        message = ' '.join(context.args[1:])
+
+        await context.bot.send_message(
+            user_id, 
+            f"💬 *ОТВЕТ АДМИНИСТРАТОРА:*\n\n{message}", 
+            parse_mode='Markdown'
+        )
+        await update.message.reply_text(f"✅ Ответ отправлен пользователю {user_id}")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
+
+# Команда для отправки сообщения от имени администратора
+async def tell_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != ADMIN_ID:
+        return
+
+    if len(context.args) < 2:
+        await update.message.reply_text("❌ Используй: /tell <user_id> <сообщение>")
+        return
+
+    try:
+        user_id = int(context.args[0])
+        message = ' '.join(context.args[1:])
+
+        await context.bot.send_message(
+            user_id, 
+            f"👑 *АДМИНИСТРАТОР:*\n\n{message}", 
+            parse_mode='Markdown'
+        )
+        await update.message.reply_text(f"✅ Сообщение отправлено пользователю {user_id}")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
+
+# Команда для ответа на последний вопрос (удобно для быстрого ответа)
+async def quick_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != ADMIN_ID:
+        return
+
+    if not context.args:
+        await update.message.reply_text("❌ Используй: /quick <сообщение>")
+        return
+
+    # Здесь можно добавить логику для получения последнего вопроса
+    # Пока просто запрашиваем ID пользователя
+    context.user_data['awaiting_quick_reply'] = True
+    message = ' '.join(context.args)
+    context.user_data['quick_reply_message'] = message
+    
+    await update.message.reply_text("📝 Введите ID пользователя для ответа:")
+
 async def pre_checkout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.pre_checkout_query
     await query.answer(ok=True)
@@ -393,6 +472,11 @@ def main():
     # Основные команды
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("admin", admin_panel))
+    
+    # Новые команды для админа
+    application.add_handler(CommandHandler("reply", reply_to_user))
+    application.add_handler(CommandHandler("tell", tell_user))
+    application.add_handler(CommandHandler("quick", quick_reply))
     
     # Обработчики callback
     application.add_handler(CallbackQueryHandler(button_handler, pattern="^(premium|videos|support|about|back_main|video_100|video_1000|video_10000)$"))
