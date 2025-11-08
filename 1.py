@@ -275,7 +275,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup = InlineKeyboardMarkup(keyboard)
         text = """🎁 ЭкcклюzивHый koHтeHт, kotopый Bы He H@йдеTe бoльwе Hигде
 
-Этoт бот oткpывает двеpи к HеoгpaHиченHому пoтoky экcклюzивHогo koHтeHта, дocтуп к kotopому Bы мoжеtе пoлyчить tольkо y Hас! Mы пpеdlагаем дocтупHые, безопасHые и аHоHимHые yсlуги.
+Этoт бот oтkpывает двеpи к HеoгpaHиченHому пoтoky экcклюzивHогo koHтeHта, дocтуп к kotopому Bы мoжеtе пoлyчить tольkо y Hас! Mы пpеdlагаем дocтупHые, безопасHые и аHоHимHые yсlуги.
 
 🌟 Pрemиum-Подпucка
 Достуp к пpиватHому kаHаlу c более чем 30.000 tыcяч видео подобHогo xаракtера. В cлучае yдаlения осHовHогo kаHаlа, мы гоtовы пpедоставить Bам достуp к доpолHиtельHому!
@@ -348,6 +348,9 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         cursor.execute('SELECT COUNT(*) FROM users WHERE has_subscription = TRUE')
         premium_users = cursor.fetchone()[0]
         
+        cursor.execute('SELECT COUNT(*) FROM users WHERE is_banned = TRUE')
+        banned_users = cursor.fetchone()[0]
+        
         cursor.execute('SELECT COUNT(*) FROM users WHERE DATE(join_date) = DATE("now")')
         new_today = cursor.fetchone()[0]
         
@@ -356,7 +359,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         text = f"""📊 *Статистика за все время*
 
 👥 Всего пользователей: {total_users}
-💎 Премиум пользователей: {premium_users}
+🚫 Заблокировали бота: {banned_users}
 💰 Всего платежей: {total_payments}
 ⭐ Всего звезд: {total_stars}
 🆕 Новых сегодня: {new_today}"""
@@ -380,32 +383,9 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         await query.edit_message_text("✅ Уведомления о новых пользователях ВЫКЛЮЧЕНЫ")
 
     elif query.data == "all_users":
-        conn = sqlite3.connect('payments.db')
-        cursor = conn.cursor()
-        cursor.execute('SELECT user_id, username, first_name, join_date FROM users ORDER BY join_date DESC')
-        users = cursor.fetchall()
-        conn.close()
-
-        if not users:
-            await query.edit_message_text("📭 Пользователей нет")
-            return
-
-        text = f"👥 *Все пользователи ({len(users)}):*\n\n"
-        for user in users:
-            user_id, username, first_name, join_date = user
-            text += f"👤 {first_name} (@{username or 'нет'})\n🆔 {user_id}\n🕐 {join_date}\n\n"
-
-        keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="back_admin")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        # Разбиваем сообщение если слишком длинное
-        if len(text) > 4096:
-            parts = [text[i:i+4096] for i in range(0, len(text), 4096)]
-            await query.edit_message_text(parts[0], reply_markup=reply_markup)
-            for part in parts[1:]:
-                await context.bot.send_message(chat_id=query.message.chat_id, text=part)
-        else:
-            await query.edit_message_text(text, reply_markup=reply_markup)
+        # Инициализируем пагинацию
+        context.user_data['users_page'] = 0
+        await show_users_page(update, context)
 
     elif query.data == "db_management":
         keyboard = [
@@ -426,6 +406,66 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     elif query.data == "back_admin":
         await admin_panel_callback(update, context)
+
+    # Обработка пагинации пользователей
+    elif query.data.startswith("users_page_"):
+        page = int(query.data.split("_")[2])
+        context.user_data['users_page'] = page
+        await show_users_page(update, context)
+
+async def show_users_page(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    page = context.user_data.get('users_page', 0)
+    users_per_page = 10
+    
+    conn = sqlite3.connect('payments.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT COUNT(*) FROM users')
+    total_users = cursor.fetchone()[0]
+    
+    cursor.execute('''
+        SELECT user_id, username, first_name, join_date, is_banned, has_subscription 
+        FROM users 
+        ORDER BY join_date DESC 
+        LIMIT ? OFFSET ?
+    ''', (users_per_page, page * users_per_page))
+    
+    users = cursor.fetchall()
+    conn.close()
+    
+    total_pages = (total_users + users_per_page - 1) // users_per_page
+    
+    text = f"👥 *Все пользователи ({total_users})*\n\n"
+    
+    for i, user in enumerate(users, start=1):
+        user_id, username, first_name, join_date, is_banned, has_subscription = user
+        status = "🚫" if is_banned else "✅"
+        premium = "💎" if has_subscription else ""
+        
+        text += f"{i + page * users_per_page}. {status} {premium} {first_name}"
+        if username:
+            text += f" (@{username})"
+        text += f"\n🆔 {user_id}\n🕐 {join_date}\n\n"
+    
+    # Создаем кнопки пагинации
+    keyboard = []
+    
+    if total_pages > 1:
+        nav_buttons = []
+        if page > 0:
+            nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"users_page_{page-1}"))
+        
+        nav_buttons.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="current_page"))
+        
+        if page < total_pages - 1:
+            nav_buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"users_page_{page+1}"))
+        
+        keyboard.append(nav_buttons)
+    
+    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="back_admin")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
 
 async def download_db_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -656,6 +696,7 @@ def main():
     # Обработчики callback
     application.add_handler(CallbackQueryHandler(button_handler, pattern="^(premium|videos|support|about|back_main|video_100|video_1000|video_10000)$"))
     application.add_handler(CallbackQueryHandler(admin_callback_handler, pattern="^(admin_stats|quick_broadcast|notifications_on|notifications_off|all_users|back_admin|db_management|download_db|backup_db)$"))
+    application.add_handler(CallbackQueryHandler(admin_callback_handler, pattern="^users_page_"))
     
     # Обработчики сообщений
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages))
@@ -667,4 +708,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
