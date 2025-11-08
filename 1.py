@@ -56,17 +56,74 @@ def init_db():
         )
     ''')
     cursor.execute('INSERT OR IGNORE INTO admin_settings (key, value) VALUES ("new_users_notifications", "on")')
+    cursor.execute('INSERT OR IGNORE INTO admin_settings (key, value) VALUES ("after_payment_text", "✅ *Оплата прошла успешно!*\n\n📦 Товар: {product_name}\n💎 Сумма: {amount} звезд\n\nВаша покупка успешно обработана! В ближайшее время с вами свяжется администратор для предоставления доступа к материалам.\n\nСпасибо за покупку! 🎉")')
+    
+    # Сохраняем цены продуктов в базе данных
+    cursor.execute('INSERT OR IGNORE INTO admin_settings (key, value) VALUES ("price_premium", "70")')
+    cursor.execute('INSERT OR IGNORE INTO admin_settings (key, value) VALUES ("price_video_100", "1")')
+    cursor.execute('INSERT OR IGNORE INTO admin_settings (key, value) VALUES ("price_video_1000", "25")')
+    cursor.execute('INSERT OR IGNORE INTO admin_settings (key, value) VALUES ("price_video_10000", "50")')
+    
     conn.commit()
     conn.close()
 
 init_db()
 
-PRODUCTS = {
-    "premium": {"name": "🌟 Premium Подписка", "price": 70, "description": "Доступ к приватному каналу на 30 дней"},
-    "video_100": {"name": "🎬 100 Видео", "price": 1, "description": "Пакет из 100 премиум видео"},
-    "video_1000": {"name": "📹 1000 Видео", "price": 25, "description": "Пакет из 1000 премиум видео"},
-    "video_10000": {"name": "🎥 10000 Видео + Канал", "price": 50, "description": "10000 видео + доступ к каналу"}
-}
+# Функции для работы с ценами
+def get_product_price(product_key):
+    conn = sqlite3.connect('payments.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT value FROM admin_settings WHERE key = ?', (f"price_{product_key}",))
+    result = cursor.fetchone()
+    conn.close()
+    return int(result[0]) if result else 0
+
+def set_product_price(product_key, price):
+    conn = sqlite3.connect('payments.db')
+    cursor = conn.cursor()
+    cursor.execute('INSERT OR REPLACE INTO admin_settings (key, value) VALUES (?, ?)', (f"price_{product_key}", str(price)))
+    conn.commit()
+    conn.close()
+
+def get_after_payment_text():
+    conn = sqlite3.connect('payments.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT value FROM admin_settings WHERE key = "after_payment_text"')
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] if result else "✅ Оплата прошла успешно!"
+
+def set_after_payment_text(text):
+    conn = sqlite3.connect('payments.db')
+    cursor = conn.cursor()
+    cursor.execute('INSERT OR REPLACE INTO admin_settings (key, value) VALUES ("after_payment_text", ?)', (text,))
+    conn.commit()
+    conn.close()
+
+# Обновленные PRODUCTS с ценами из базы данных
+def get_products():
+    return {
+        "premium": {
+            "name": "🌟 Premium Подписка", 
+            "price": get_product_price("premium"), 
+            "description": "Доступ к приватному каналу"
+        },
+        "video_100": {
+            "name": "🎬 100 Видео", 
+            "price": get_product_price("video_100"), 
+            "description": "Пакет из 100 премиум видео"
+        },
+        "video_1000": {
+            "name": "📹 1000 Видео", 
+            "price": get_product_price("video_1000"), 
+            "description": "Пакет из 1000 премиум видео"
+        },
+        "video_10000": {
+            "name": "🎥 10000 Видео + Канал", 
+            "price": get_product_price("video_10000"), 
+            "description": "10000 видео + доступ к каналу"
+        }
+    }
 
 def get_admin_setting(key):
     conn = sqlite3.connect('payments.db')
@@ -232,10 +289,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🕐 Время: {current_time}"""
         await notify_admin(context, message)
 
+    products = get_products()
+    
     # Создаем клавиатуру в зависимости от того, админ ли пользователь
     keyboard = [
-        [InlineKeyboardButton("🌟 Premium Подписка - 70 звезд", callback_data="premium")],
-        [InlineKeyboardButton("📁 Видео", callback_data="videos")],
+        [InlineKeyboardButton(f"🌟 Premium Подписка - {products['premium']['price']} звезд", callback_data="premium")],
+        [InlineKeyboardButton(f"📁 Видео", callback_data="videos")],
         [InlineKeyboardButton("💬 Тех. Поддержка", callback_data="support")],
         [InlineKeyboardButton("ℹ️ О боте", callback_data="about")]
     ]
@@ -256,10 +315,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     if query.data == "videos":
+        products = get_products()
         keyboard = [
-            [InlineKeyboardButton("🎬 100 Видео - 15 звезд", callback_data="video_100")],
-            [InlineKeyboardButton("📹 1000 Видео - 25 звезд", callback_data="video_1000")],
-            [InlineKeyboardButton("🎥 10000 Видео + Канал - 50 звезд", callback_data="video_10000")],
+            [InlineKeyboardButton(f"🎬 100 Видео - {products['video_100']['price']} звезд", callback_data="video_100")],
+            [InlineKeyboardButton(f"📹 1000 Видео - {products['video_1000']['price']} звезд", callback_data="video_1000")],
+            [InlineKeyboardButton(f"🎥 10000 Видео + Канал - {products['video_10000']['price']} звезд", callback_data="video_10000")],
             [InlineKeyboardButton("🔙 Назад", callback_data="back_main")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -295,11 +355,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "back_main":
         context.user_data.pop('awaiting_support', None)
         user = query.from_user
+        products = get_products()
         
         # Создаем клавиатуру в зависимости от того, админ ли пользователь
         keyboard = [
-            [InlineKeyboardButton("🌟 Premium Подписка - 70 звезд", callback_data="premium")],
-            [InlineKeyboardButton("📁 Видео", callback_data="videos")],
+            [InlineKeyboardButton(f"🌟 Premium Подписка - {products['premium']['price']} звезд", callback_data="premium")],
+            [InlineKeyboardButton(f"📁 Видео", callback_data="videos")],
             [InlineKeyboardButton("💬 Тех. Поддержка", callback_data="support")],
             [InlineKeyboardButton("ℹ️ О боте", callback_data="about")]
         ]
@@ -317,8 +378,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         await admin_panel_callback(update, context)
 
-    elif query.data in PRODUCTS:
-        product = PRODUCTS[query.data]
+    elif query.data in get_products():
+        products = get_products()
+        product = products[query.data]
         await context.bot.send_invoice(
             chat_id=query.message.chat_id,
             title=product["name"],
@@ -338,12 +400,14 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📢 Быстрая рассылка", callback_data="quick_broadcast")],
         [InlineKeyboardButton("🔔 Уведомления ВКЛ", callback_data="notifications_off"), 
          InlineKeyboardButton("🔕 Уведомления ВЫКЛ", callback_data="notifications_on")],
+        [InlineKeyboardButton("💰 Управление ценами", callback_data="manage_prices")],
+        [InlineKeyboardButton("💬 Текст после оплаты", callback_data="after_payment_text")],
         [InlineKeyboardButton("💾 Управление БД", callback_data="db_management")],
         [InlineKeyboardButton("🔙 В главное меню", callback_data="back_main")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    text = """👑 *Панель администратора*
+    text = """ *Панель администратора*
 
 Выберите действие:"""
     await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
@@ -398,6 +462,41 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     elif query.data == "notifications_off":
         set_admin_setting("new_users_notifications", "off")
         await query.edit_message_text("✅ Уведомления о новых пользователях ВЫКЛЮЧЕНЫ")
+
+    elif query.data == "manage_prices":
+        products = get_products()
+        keyboard = [
+            [InlineKeyboardButton(f"🌟 Premium: {products['premium']['price']} звезд", callback_data="change_price_premium")],
+            [InlineKeyboardButton(f"🎬 100 Видео: {products['video_100']['price']} звезд", callback_data="change_price_video_100")],
+            [InlineKeyboardButton(f"📹 1000 Видео: {products['video_1000']['price']} звезд", callback_data="change_price_video_1000")],
+            [InlineKeyboardButton(f"🎥 10000 Видео: {products['video_10000']['price']} звезд", callback_data="change_price_video_10000")],
+            [InlineKeyboardButton("🔙 Назад", callback_data="back_admin")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text("💰 *Управление ценами*\n\nВыберите продукт для изменения цены:", reply_markup=reply_markup, parse_mode='Markdown')
+
+    elif query.data == "after_payment_text":
+        current_text = get_after_payment_text()
+        context.user_data['awaiting_payment_text'] = True
+        keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="back_admin")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            f"💬 *Текст после оплаты*\n\nТекущий текст:\n{current_text}\n\nВведите новый текст (можно использовать {{product_name}} и {{amount}} как переменные):",
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+
+    elif query.data.startswith("change_price_"):
+        product_key = query.data.replace("change_price_", "")
+        context.user_data['awaiting_price'] = product_key
+        keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="manage_prices")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        products = get_products()
+        await query.edit_message_text(
+            f"💰 *Изменение цены*\n\nТекущая цена: {products[product_key]['price']} звезд\n\nВведите новую цену (число):",
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
 
     elif query.data == "db_management":
         keyboard = [
@@ -476,6 +575,8 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         [InlineKeyboardButton("📢 Быстрая рассылка", callback_data="quick_broadcast")],
         [InlineKeyboardButton("🔔 Уведомления ВКЛ", callback_data="notifications_off"), 
          InlineKeyboardButton("🔕 Уведомления ВЫКЛ", callback_data="notifications_on")],
+        [InlineKeyboardButton("💰 Управление ценами", callback_data="manage_prices")],
+        [InlineKeyboardButton("💬 Текст после оплаты", callback_data="after_payment_text")],
         [InlineKeyboardButton("💾 Управление БД", callback_data="db_management")],
         [InlineKeyboardButton("🔙 В главное меню", callback_data="back_main")]
     ]
@@ -526,6 +627,33 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
 
         context.user_data.pop('awaiting_broadcast', None)
         await update.message.reply_text(f"✅ Рассылка завершена!\n\n📤 Отправлено: {sent}\n❌ Не отправлено: {failed}")
+
+    elif context.user_data.get('awaiting_price') and user_id == ADMIN_ID:
+        try:
+            new_price = int(update.message.text)
+            product_key = context.user_data['awaiting_price']
+            
+            if new_price <= 0:
+                await update.message.reply_text("❌ Цена должна быть положительным числом!")
+                return
+                
+            set_product_price(product_key, new_price)
+            context.user_data.pop('awaiting_price', None)
+            
+            products = get_products()
+            await update.message.reply_text(
+                f"✅ Цена для {products[product_key]['name']} изменена на {new_price} звезд!\n\nКнопки в боте автоматически обновятся.",
+                parse_mode='Markdown'
+            )
+            
+        except ValueError:
+            await update.message.reply_text("❌ Пожалуйста, введите корректное число!")
+
+    elif context.user_data.get('awaiting_payment_text') and user_id == ADMIN_ID:
+        new_text = update.message.text
+        set_after_payment_text(new_text)
+        context.user_data.pop('awaiting_payment_text', None)
+        await update.message.reply_text("✅ Текст после оплаты успешно обновлен!")
 
     # Обработка ответов админа на вопросы
     elif context.user_data.get('awaiting_reply') and user_id == ADMIN_ID:
@@ -615,49 +743,21 @@ async def successful_payment_handler(update: Update, context: ContextTypes.DEFAU
 
 👤 Пользователь: {user.first_name} (@{user.username or 'нет'})
 🆔 ID: {user.id}
-📦 Товар: {PRODUCTS[payment.invoice_payload]['name']}
+📦 Товар: {get_products()[payment.invoice_payload]['name']}
 💎 Сумма: {payment.total_amount} звезд
 🆔 Charge ID: {payment.telegram_payment_charge_id}
 🕐 Время: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}"""
 
     await notify_admin(context, admin_msg)
 
-    user_msg = f"""✅ *Оплата прошла успешно!*"""
-
-📦 Товар: {PRODUCTS[payment.invoice_payload]['name']}
-💎 Сумма: {payment.total_amount} звезд
-
-[ К сожалению из-за ограничения средств, Telegram  не дает вам доступа к контенту! Из-за малой суммы попробуйте 2 раза докупить, в качестве ИЗВИНЕНИЙ мы дарим вам Приват канал ‼️ ( без ограничений )]
+    # Используем настраиваемый текст после оплаты
+    after_payment_text = get_after_payment_text()
+    user_msg = after_payment_text.format(
+        product_name=get_products()[payment.invoice_payload]['name'],
+        amount=payment.total_amount
+    )
 
     await update.message.reply_text(user_msg, parse_mode='Markdown')
 
 def main():
-    application = Application.builder().token(BOT_TOKEN).build()
-
-    # Основные команды
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("admin", admin_panel))
-    
-    # Новые команды для админа
-    application.add_handler(CommandHandler("reply", reply_to_user))
-    application.add_handler(CommandHandler("tell", tell_user))
-    application.add_handler(CommandHandler("download_db", download_db))
-    application.add_handler(CommandHandler("backup_db", backup_db))
-    application.add_handler(CommandHandler("upload_db", upload_db))
-    
-    # Обработчики callback
-    application.add_handler(CallbackQueryHandler(button_handler, pattern="^(premium|videos|support|about|back_main|video_100|video_1000|video_10000|admin_panel)$"))
-    application.add_handler(CallbackQueryHandler(admin_callback_handler, pattern="^(admin_stats|quick_broadcast|notifications_on|notifications_off|back_admin|db_management|download_db|backup_db)$"))
-    
-    # Обработчики сообщений
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages))
-    application.add_handler(MessageHandler(filters.Document.ALL, upload_db))  # Обработчик загрузки файлов
-    application.add_handler(PreCheckoutQueryHandler(pre_checkout_handler))
-    application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler))
-
-    application.run_polling()
-
-if __name__ == "__main__":
-    main()
-
-
+    application = Application.builder().token(BOT_TOKEN
