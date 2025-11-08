@@ -582,7 +582,7 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    text = """👑 *Панель администратора*
+    text = """ *Панель администратора*
 
 Выберите действие:"""
     await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
@@ -710,7 +710,7 @@ async def tell_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await context.bot.send_message(
             user_id, 
-            f"👑 *АДМИНИСТРАТОР:*\n\n{message}", 
+            f" *АДМИНИСТРАТОР:*\n\n{message}", 
             parse_mode='Markdown'
         )
         await update.message.reply_text(f"✅ Сообщение отправлено пользователю {user_id}")
@@ -760,4 +760,31 @@ async def successful_payment_handler(update: Update, context: ContextTypes.DEFAU
     await update.message.reply_text(user_msg, parse_mode='Markdown')
 
 def main():
-    application = Application.builder().token(BOT_TOKEN
+    application = Application.builder().token(BOT_TOKEN).build()
+
+    # Основные команды
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("admin", admin_panel))
+    
+    # Новые команды для админа
+    application.add_handler(CommandHandler("reply", reply_to_user))
+    application.add_handler(CommandHandler("tell", tell_user))
+    application.add_handler(CommandHandler("download_db", download_db))
+    application.add_handler(CommandHandler("backup_db", backup_db))
+    application.add_handler(CommandHandler("upload_db", upload_db))
+    
+    # Обработчики callback
+    application.add_handler(CallbackQueryHandler(button_handler, pattern="^(premium|videos|support|about|back_main|video_100|video_1000|video_10000|admin_panel)$"))
+    application.add_handler(CallbackQueryHandler(admin_callback_handler, pattern="^(admin_stats|quick_broadcast|notifications_on|notifications_off|back_admin|db_management|download_db|backup_db|manage_prices|after_payment_text)$"))
+    application.add_handler(CallbackQueryHandler(admin_callback_handler, pattern="^change_price_"))
+    
+    # Обработчики сообщений
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages))
+    application.add_handler(MessageHandler(filters.Document.ALL, upload_db))  # Обработчик загрузки файлов
+    application.add_handler(PreCheckoutQueryHandler(pre_checkout_handler))
+    application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler))
+
+    application.run_polling()
+
+if __name__ == "__main__":
+    main()
