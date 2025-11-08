@@ -622,7 +622,7 @@ async def successful_payment_handler(update: Update, context: ContextTypes.DEFAU
 
     await notify_admin(context, admin_msg)
 
-    user_msg = f"""✅ *Оплата прошла успешно!*
+    user_msg = f"""✅ *Оплата прошла успешно!*"""
 
 📦 Товар: {PRODUCTS[payment.invoice_payload]['name']}
 💎 Сумма: {payment.total_amount} звезд
@@ -659,4 +659,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
