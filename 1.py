@@ -480,10 +480,11 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         context.user_data['awaiting_payment_text'] = True
         keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="back_admin")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        # Убираем parse_mode для отображения сырого текста
         await query.edit_message_text(
-            f"💬 *Текст после оплаты*\n\nТекущий текст:\n{current_text}\n\nВведите новый текст (можно использовать {{product_name}} и {{amount}} как переменные):",
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
+            f"💬 Текст после оплаты\n\nТекущий текст:\n{current_text}\n\nВведите новый текст (можно использовать {{product_name}} и {{amount}} как переменные):",
+            reply_markup=reply_markup
         )
 
     elif query.data.startswith("change_price_"):
@@ -757,6 +758,16 @@ async def successful_payment_handler(update: Update, context: ContextTypes.DEFAU
         amount=payment.total_amount
     )
 
+    # Отправляем без parse_mode чтобы избежать ошибок разметки
+    await update.message.reply_text(user_msg)
+
+    # Используем настраиваемый текст после оплаты
+    after_payment_text = get_after_payment_text()
+    user_msg = after_payment_text.format(
+        product_name=get_products()[payment.invoice_payload]['name'],
+        amount=payment.total_amount
+    )
+
     await update.message.reply_text(user_msg, parse_mode='Markdown')
 
 def main():
@@ -788,3 +799,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
