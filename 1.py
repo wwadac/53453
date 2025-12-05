@@ -8,7 +8,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, PreCheckoutQueryHandler, MessageHandler, filters
 from datetime import datetime
 
-BOT_TOKEN = "8401230506:AAELlpnPJAHhSfQu1fAUZW7VjvWbXFOQYI8"
+BOT_TOKEN = "7795610786:AAHhkUL7WcOLYVO18FDyceG3ZTDtWGpphZo"
 ADMIN_ID = 8000395560
 
 logging.basicConfig(level=logging.INFO)
@@ -799,4 +799,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
